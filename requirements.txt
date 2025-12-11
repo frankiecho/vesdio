@@ -1,0 +1,12 @@
+dash
+plotly
+pandas
+pyarrow
+numpy
+dask
+pymrio
+python-dotenv
+PyYAML
+dash-bootstrap-components
+pytest
+scipy
