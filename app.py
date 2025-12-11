@@ -9,6 +9,8 @@ import pandas as pd
 import yaml
 import base64
 import io
+import webbrowser
+from threading import Timer
 
 # Import core functions from the src modules
 from src.data_loader import load_labels_data, load_mrio_matrices, load_production_history, load_encore_materiality
@@ -39,13 +41,25 @@ dropdown_style = {
 
 years = list(range(1995, 2022))
 
-app.layout = html.Div(style={
-    'fontFamily': 'Arial, sans-serif',
-    'padding': '20px'
-}, children=[
-    html.H1("EXIOBASE Supply Shock Simulator", style={'textAlign': 'center'}),
+app.layout = html.Div(style={'fontFamily': 'Arial, sans-serif'}, children=[
+    # Top Menu Bar
+    html.Div(
+        style={
+            'backgroundColor': '#f0f0f0',
+            'borderBottom': '1px solid #ddd',
+            'padding': '10px 40px',
+            'display': 'flex',
+            'alignItems': 'center',
+            'justifyContent': 'space-between'
+        },
+        children=[
+            html.H1("VESD.IO", style={'margin': 0, 'fontSize': '24px'}),
+            html.Button("Instructions", id="open-instructions-button", n_clicks=0, className='button-primary')
+        ]
+    ),
 
-    html.Div(className='row', children=[
+    # Main Content Area
+    html.Div(style={'padding': '20px'}, children=[
         # Left column for controls
         # This dcc.Store holds the list of shocks for the scenario builder
         dcc.Store(id='scenario-store', storage_type='memory', data=[]),
@@ -53,11 +67,11 @@ app.layout = html.Div(style={
 
         html.Div(className='four columns', style={'paddingRight': '20px'}, children=[
             # Run Button at the top
-            html.Div(style={'textAlign': 'center', 'marginBottom': '20px'}, children=[
-                html.Button('▶ Run Simulation', id='run-button', n_clicks=0, style={'fontSize': '18px', 'width': '100%'}),
+            html.Div(className='control-group', children=[
+                html.Button('▶ Run Simulation', id='run-button', n_clicks=0, style={'fontSize': '18px', 'width': '100%', 'marginBottom': '20px'}),
             ]),
 
-            # User Target Selection
+            # User Target Selection & Scenario Configuration
             html.Div(className='control-group', children=[
                 html.H3("Your Position"),
                 html.Label("Select Your Home Region:"),
@@ -65,9 +79,7 @@ app.layout = html.Div(style={
                 html.Label("Select Your Home Sector:", style={'marginTop': '10px'}),
                 dcc.Dropdown(id='home-sector-dropdown', style=dropdown_style),
             ]),
-
-            # Shock Configuration
-            html.Div(className='control-group', style={'marginTop': '20px'}, children=[
+            html.Div(className='control-group', style={'marginTop': '25px'}, children=[
                 html.H3("Define Shock Event"),                
                 html.Div(id='single-shock-controls', children=[
                     html.Label("Shocked Region:", style={'marginTop': '10px'}),
@@ -106,8 +118,7 @@ app.layout = html.Div(style={
                 ]),
             ]),
 
-            # Scenario and Magnitude
-            html.Div(className='control-group', style={'marginTop': '20px'}, children=[
+            html.Div(className='control-group', style={'marginTop': '25px'}, children=[
                 html.H3("Scenario Type & Magnitude"),
                 html.Label("Select Year:"),
                 dcc.Dropdown(
@@ -156,8 +167,8 @@ app.layout = html.Div(style={
                     'left': 0,
                     'width': '100%',
                     'height': '100%',
-                    'backgroundColor': 'rgba(240, 240, 240, 0.5)', # Translucent grey
-                    'zIndex': 999 # Ensure it's on top
+                    'zIndex': 999, # Ensure it's on top
+                    'minHeight': '90vh'
                 },
                 children=html.Div(id='results-output', children=[
                     html.H3(id='results-title', style={'textAlign': 'center'}),
@@ -300,6 +311,54 @@ app.layout = html.Div(style={
                 ])
             ])
         ]
+    ),
+
+    # Instructions Modal
+    html.Div(
+        id="instructions-modal",
+        style={ # Main container for the modal
+            'display': 'none', # Toggled by callback
+            'position': 'fixed', 'zIndex': 1002, 'left': 0, 'top': 0,
+            'width': '100%', 'height': '100%', 'overflow': 'auto',
+            'backgroundColor': 'rgba(0,0,0,0.4)'
+        },
+        children=[
+            # Modal content box
+            html.Div(style={'backgroundColor': '#fefefe', 'margin': '10% auto', 'padding': '20px', 'border': '1px solid #888', 'width': '80%', 'maxWidth': '700px'}, children=[
+                # Header
+                html.Div([
+                    html.Span("×", id="instructions-modal-close-button", style={'color': '#aaa', 'float': 'right', 'fontSize': '28px', 'fontWeight': 'bold', 'cursor': 'pointer'}),
+                    html.H2("How to Use VESD.IO"),
+                ]),
+                # Body with instructions
+                dcc.Markdown('''
+                    Welcome to the Valuing Ecosystem Service Dependencies with Input-Output (VESD.IO) tool. This application helps you simulate the economic impacts of supply chain disruptions.
+
+                    #### **Step 1: Set Your Perspective**
+                    - **Home Region & Sector**: In the "Your Position" panel, select the country and industry sector that represents your organization or area of interest. The results will be framed from this perspective.
+
+                    #### **Step 2: Define the Disruption**
+                    You can model a disruption in two ways:
+                    - **A) Single Shock**: Use the "Define Shock Event" panel to model a simple disruption.
+                        - **Sector-Specific**: Choose a region and a specific sector to disrupt (e.g., a 10% reduction in 'Cultivation of wheat' in 'Ukraine').
+                        - **Ecosystem Service Shock**: Choose a region and an ecosystem service (e.g., 'Water Supply' in 'Brazil'). The tool will automatically apply the shock to all sectors in that region that are highly dependent on that service.
+                    - **B) Custom Scenario**: For more complex events, click **"Create Custom Scenario..."**. This opens the Scenario Builder where you can add multiple shocks across different regions and sectors, each with its own magnitude. You can also import/export these scenarios as YAML files.
+
+                    #### **Step 3: Configure the Simulation**
+                    - **Year**: Select the dataset year for the underlying economic model.
+                    - **Calculation Method**: Choose between 'Ghosh (Supply-Side)' for supply shocks (default) or 'Leontief (Demand-Side)' for demand shocks.
+                    - **Shock Magnitude**: Use the slider to set the severity of the disruption (e.g., a 10% shock means the output of the shocked sector(s) is reduced by 10%).
+
+                    #### **Step 4: Run and Analyze**
+                    - Click the **"▶ Run Simulation"** button.
+                    - The results will appear on the right. Use the tabs to explore different views:
+                        - **Summary**: Key impacts on your home position and a waterfall chart showing contributing factors.
+                        - **Geographic Impact**: A world map visualizing the global distribution of impacts.
+                        - **Supply Chain Flow**: A Sankey diagram illustrating the flow of the disruption through the supply chain.
+                        - **Global Impacts**: A table of the most affected sectors worldwide.
+                ''')
+            ])
+        ]
     )
 ])
 
@@ -404,6 +463,23 @@ def toggle_modal(open_clicks, edit_clicks, save_clicks, close_clicks, current_st
     if trigger_id in ['open-builder-button', 'edit-builder-button']:
         return {**current_style, 'display': 'block'}
     if trigger_id in ['modal-save-button', 'modal-close-button']:
+        return {**current_style, 'display': 'none'}
+    return current_style
+
+@app.callback(
+    Output('instructions-modal', 'style'),
+    [Input('open-instructions-button', 'n_clicks'),
+     Input('instructions-modal-close-button', 'n_clicks')],
+    [State('instructions-modal', 'style')],
+    prevent_initial_call=True
+)
+def toggle_instructions_modal(open_clicks, close_clicks, current_style):
+    ctx = dash.callback_context
+    trigger_id = ctx.triggered[0]['prop_id'].split('.')[0]
+
+    if trigger_id == 'open-instructions-button':
+        return {**current_style, 'display': 'block'}
+    if trigger_id == 'instructions-modal-close-button':
         return {**current_style, 'display': 'none'}
     return current_style
 
@@ -597,5 +673,13 @@ def run_and_update_all_results(n_clicks, year, home_region, home_sector, shock_r
     )
 
 if __name__ == '__main__':
-    print("Application ready. Starting server on http://127.0.0.1:8050")
-    app.run(debug=True)
+    host = "127.0.0.1"
+    port = 8050
+    url = f"http://{host}:{port}"
+
+    def open_browser():
+        webbrowser.open_new(url)
+
+    print(f"Application ready. Starting server on {url}")
+    Timer(1, open_browser).start()
+    app.run(host=host, port=port, debug=True)
