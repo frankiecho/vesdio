@@ -10,6 +10,7 @@ import yaml
 import base64
 import io
 import webbrowser
+import os
 from threading import Timer
 
 # Import core functions from the src modules
@@ -332,10 +333,10 @@ app.layout = html.Div(style={'fontFamily': 'Arial, sans-serif'}, children=[
                 ]),
                 # Body with instructions
                 dcc.Markdown('''
-                    Welcome to the Valuing Ecosystem Service Dependencies with Input-Output (VESD.IO) tool. This application helps you simulate the economic impacts of supply chain disruptions.
+                    Welcome to the Valuing Ecosystem Service Dependencies with Input-Output (VESD.IO) tool. This application helps you simulate the economic impacts of ecosystem services and other supply chain disruption scenarios to your business.
 
-                    #### **Step 1: Set Your Perspective**
-                    - **Home Region & Sector**: In the "Your Position" panel, select the country and industry sector that represents your organization or area of interest. The results will be framed from this perspective.
+                    #### **Step 1: Set Your Asset region and sector**
+                    - **Home Region & Sector**: In the "Your Position" panel, select the country and industry sector that represents your organization's asset region and sector.
 
                     #### **Step 2: Define the Disruption**
                     You can model a disruption in two ways:
@@ -353,9 +354,20 @@ app.layout = html.Div(style={'fontFamily': 'Arial, sans-serif'}, children=[
                     - Click the **"▶ Run Simulation"** button.
                     - The results will appear on the right. Use the tabs to explore different views:
                         - **Summary**: Key impacts on your home position and a waterfall chart showing contributing factors.
-                        - **Geographic Impact**: A world map visualizing the global distribution of impacts.
-                        - **Supply Chain Flow**: A Sankey diagram illustrating the flow of the disruption through the supply chain.
-                        - **Global Impacts**: A table of the most affected sectors worldwide.
+                        - **Geographic Impact**: A world map visualizing where these impacts come from in the world.
+                        - **Supply Chain Flow**: A Sankey diagram showing how the impacts flow through the supply chain to affect your asset region and sector.
+                        - **Global Impacts**: A table of the most affected sectors worldwide based on this supply chain disruption.
+                        - **Historical Context**: A line chart showing the size of the impact on production relative to the production across historical time-periods.
+                             
+                    #### **Technical Note**
+                    
+                    The input-output models are based on EXIOBASE v3.9.6 (June 2025). It covers all 44 countries and 5 rest-of-world regions in EXIOBASE. 
+                    
+                    EXIOBASE citation: Stadler, K., Wood, R., Bulavskaya, T., Södersten, C.-J., Simas, M., Schmidt, S., Usubiaga, A., Acosta-Fernández, J., Kuenen, J., Bruckner, M., Giljum, S., Lutter, S., Merciai, S., Schmidt, J. H., Theurl, M. C., Plutzar, C., Kastner, T., Eisenmenger, N., Erb, K.-H., … Tukker, A. (2025). EXIOBASE 3 (3.9.6) [Data set]. Zenodo. https://doi.org/10.5281/zenodo.15689391
+                
+                    The link between ecosystem services and sector production is calculated through materiality ratings in the ENCORE database. Sectors with "High" or "Very High" materiality to an ecosystem services are assumed to have production decreased in proportion to the specified magnitude of production disruption. Sectors without a "High" or "Very High" materiality rating to an ecosystem service is assumed to be unaffected.
+                             
+                    ENCORE citation: Global Canopy and UNEP (2025). Exploring Natural Capital Opportunities, Risk and Exposure (June 2025 update). https://encorenature.org/en
                 ''')
             ])
         ]
@@ -678,8 +690,11 @@ if __name__ == '__main__':
     url = f"http://{host}:{port}"
 
     def open_browser():
-        webbrowser.open_new(url)
+        webbrowser.open_new(url) 
 
+    # The reloader will run this script twice. We only want to open the browser on the first run.
+    if not os.environ.get("WERKZEUG_RUN_MAIN"):
+        Timer(1, open_browser).start()
+        
     print(f"Application ready. Starting server on {url}")
-    Timer(1, open_browser).start()
     app.run(host=host, port=port, debug=True)
