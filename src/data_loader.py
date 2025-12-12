@@ -11,19 +11,22 @@ from pathlib import Path
 # Load environment variables from .env file
 load_dotenv()
 
-def resource_path(relative_path):
-    """ Get absolute path to resource, works for dev and for PyInstaller """
-    try:
-        # PyInstaller creates a temp folder and stores path in _MEIPASS
-        base_path = sys._MEIPASS
-    except Exception:
-        # Not running in a PyInstaller bundle, so the base path is the project root
-        base_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+def get_base_data_path():
+    """
+    Determines the base path for data files.
+    - For a packaged app (PyInstaller), it's a folder named 'data' inside the bundle.
+    - For development, it uses the DATA_DIR from .env, defaulting to './data'.
+    """
+    if getattr(sys, 'frozen', False):
+        # Running in a PyInstaller bundle
+        return Path(sys._MEIPASS) / 'data'
+    else:
+        # Running in a normal Python environment
+        return Path(os.getenv('DATA_DIR', 'data'))
 
-    return os.path.join(base_path, relative_path)
-
-EXIOBASE_DIR = Path(resource_path(os.getenv('DATA_DIR', 'data'))) / 'exiobase'
-ENCORE_DATA_DIR = Path(resource_path(os.getenv('DATA_DIR', 'data'))) / 'ENCORE_data'
+BASE_DATA_PATH = get_base_data_path()
+EXIOBASE_DIR = BASE_DATA_PATH / 'exiobase'
+ENCORE_DATA_DIR = BASE_DATA_PATH / 'ENCORE_data'
 
 # --- DUMMY DATA GENERATION (FALLBACK) ---
 

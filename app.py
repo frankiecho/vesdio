@@ -10,10 +10,10 @@ import yaml
 import base64
 import io
 import webbrowser
+import sys
 import os
 from threading import Timer
 
-# Import core functions from the src modules
 from src.data_loader import load_labels_data, load_mrio_matrices, load_production_history, load_encore_materiality
 from src.callbacks import handle_simulation_results
 from src.config import country_mapping, COUNTRY_CODES_3_LETTER, COLOR_PALETTE, get_valid_region_groups
