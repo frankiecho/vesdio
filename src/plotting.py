@@ -1,7 +1,7 @@
 import plotly.graph_objects as go
 import pandas as pd
 import numpy as np
-from dash import dash_table
+from dash import dash_table, html
 
 def truncate_label(label, max_length=60):
     """Shortens a string to a max length and adds '...' if truncated."""
@@ -67,13 +67,19 @@ def create_historical_production_plot(production_history, X_df, shock_maps, coun
 
     return fig
 
-def create_before_after_barchart(X_df, delta_x, home_region, home_sector, country_mapping, COLOR_PALETTE):
+def create_before_after_barchart(X_df, delta_x, home_region, home_sector, country_mapping, COLOR_PALETTE, is_portfolio=False, portfolio_before=0, portfolio_after=0):
     """Generates the before/after impact bar chart for the home sector."""
     fig = go.Figure()
-    home_label = (home_region, home_sector)
-    
-    before_shock_output = X_df.loc[home_label, 'GrossOutput']
-    after_shock_output = before_shock_output + delta_x.loc[home_label]
+
+    if is_portfolio:
+        before_shock_output = portfolio_before
+        after_shock_output = portfolio_after
+        title_text = "Impact on Total Portfolio Value"
+    else:
+        home_label = (home_region, home_sector)
+        before_shock_output = X_df.loc[home_label, 'GrossOutput']
+        after_shock_output = before_shock_output + delta_x.loc[home_label]
+        title_text = f"Impact on Gross Output for '{home_sector}' in {country_mapping.get(home_region, home_region)}"
 
     fig.add_trace(go.Bar(
         x=['Before Shock', 'After Shock'],
@@ -83,7 +89,7 @@ def create_before_after_barchart(X_df, delta_x, home_region, home_sector, countr
         marker_color=[COLOR_PALETTE['blue'], COLOR_PALETTE['red']]
     ))
     fig.update_layout(
-        title_text=f"Impact on Gross Output for '{home_sector}' in {country_mapping.get(home_region, home_region)}",
+        title_text=title_text,
         yaxis_title="Gross Output (Monetary Units)",
         paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
         xaxis=dict(showline=True, linecolor='black', linewidth=1),
@@ -262,6 +268,165 @@ def create_sankey_diagram(A_df, delta_x, shock_maps, home_region, home_sector, c
     fig.update_layout(title_text=title, paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
     return fig
 
+def create_portfolio_sankey_diagram(A_df, delta_x, shock_maps, portfolio_data, country_mapping, COLOR_PALETTE, max_intermediaries=5):
+    """
+    Generates an aggregated Sankey diagram for a portfolio, showing the flow of impact
+    from shocked sectors to the total portfolio through key intermediaries.
+    """
+    shock_labels = [(s['region'], s['sector']) for s in shock_maps]
+    portfolio_labels = [(p['region'], p['sector']) for p in portfolio_data]
+    portfolio_weights = {(p['region'], p['sector']): p['weight'] / 100.0 for p in portfolio_data}
+
+    # Calculate the monetary value of reduced input flows between all sectors
+    input_reduction_flows = A_df.multiply(delta_x, axis='columns').abs()
+
+    # Find top intermediaries: sectors that are both major customers of the shock
+    # and major suppliers to the portfolio.
+    customers_of_shock = input_reduction_flows.loc[shock_labels, :].sum(axis=0).nlargest(max_intermediaries * 3).index
+    
+    # Weighted sum of flows to portfolio assets
+    suppliers_to_portfolio = pd.Series(0.0, index=A_df.index)
+    for p_label, weight in portfolio_weights.items():
+        suppliers_to_portfolio += input_reduction_flows.loc[:, p_label] * weight
+    
+    top_suppliers_to_portfolio = suppliers_to_portfolio.nlargest(max_intermediaries * 3).index
+
+    top_intermediaries = customers_of_shock.intersection(top_suppliers_to_portfolio)
+    top_intermediaries = top_intermediaries.drop(shock_labels, errors='ignore').drop(portfolio_labels, errors='ignore')
+    top_intermediaries = top_intermediaries[:max_intermediaries]
+
+    # --- Build Sankey Data ---
+    sources, targets, values = [], [], []
+    
+    # Define nodes: Shocks, Intermediaries, and a single "Total Portfolio" node
+    portfolio_node_label = "Total Portfolio"
+    all_nodes_tuples = sorted(list(set(shock_labels + top_intermediaries.tolist())), key=str)
+    
+    node_labels = [f"{country_mapping.get(r, r)} - {s}" for r, s in all_nodes_tuples] + [portfolio_node_label]
+    node_map = {node: i for i, node in enumerate(all_nodes_tuples)}
+    portfolio_node_index = len(node_labels) - 1
+
+    # Assign colors
+    node_colors = [COLOR_PALETTE['red']] * len(shock_labels) + \
+                  [COLOR_PALETTE['amber']] * len(top_intermediaries) + \
+                  [COLOR_PALETTE['blue']]
+
+    # 1. Shock -> Intermediary flows
+    for s_node in shock_labels:
+        for i_node in top_intermediaries:
+            flow = input_reduction_flows.loc[s_node, i_node]
+            if flow > 1e-6:
+                sources.append(node_map[s_node])
+                targets.append(node_map[i_node])
+                values.append(flow)
+
+    # 2. Intermediary -> Portfolio flows (weighted sum)
+    for i_node in top_intermediaries:
+        total_flow_to_portfolio = suppliers_to_portfolio.get(i_node, 0)
+        if total_flow_to_portfolio > 1e-6:
+            sources.append(node_map[i_node])
+            targets.append(portfolio_node_index)
+            values.append(total_flow_to_portfolio)
+
+    # 3. Direct Shock -> Portfolio flows (weighted sum)
+    for s_node in shock_labels:
+        direct_flow_to_portfolio = sum(input_reduction_flows.loc[s_node, p_label] * weight for p_label, weight in portfolio_weights.items())
+        if direct_flow_to_portfolio > 1e-6:
+            sources.append(node_map[s_node])
+            targets.append(portfolio_node_index)
+            values.append(direct_flow_to_portfolio)
+
+    fig = go.Figure(data=[go.Sankey(
+        node=dict(pad=15, thickness=20, line=dict(color="black", width=0.5), label=node_labels, color=node_colors),
+        link=dict(source=sources, target=targets, value=values, color="rgba(153, 153, 153, 0.4)")
+    )])
+    
+    title = "Aggregated Supply Chain Impact Flow to Portfolio"
+    if not sources:
+        fig.add_annotation(text="No significant intermediary links found for the portfolio.", showarrow=False)
+
+    fig.update_layout(title_text=title, paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
+    return fig
+
+def create_portfolio_breakdown_display(portfolio_data, delta_x, X_df, country_mapping, COLOR_PALETTE):
+    """
+    Creates a table and summary for the portfolio breakdown tab.
+    """
+    records = []
+    total_before = 0
+    total_after = 0
+
+    for item in portfolio_data:
+        label = (item['region'], item['sector'])
+        weight = item['weight']
+        
+        before_val = X_df.loc[label, 'GrossOutput']
+        delta_val = delta_x.loc[label]
+        after_val = before_val + delta_val
+        
+        relative_change = (delta_val / before_val) * 100 if before_val > 1e-9 else 0
+
+        records.append({
+            'Region': country_mapping.get(item['region'], item['region']),
+            'Sector': item['sector'],
+            'Weight (%)': weight,
+            'Absolute Change': delta_val,
+            'Relative Change (%)': relative_change
+        })
+        
+        # For weighted total calculation
+        weight_prop = weight / 100.0
+        total_before += before_val * weight_prop
+        total_after += after_val * weight_prop
+
+    # Create DataFrame for the table
+    df = pd.DataFrame(records)
+
+    # Create the DataTable
+    table = dash_table.DataTable(
+        columns=[
+            {"name": "Region", "id": "Region"},
+            {"name": "Sector", "id": "Sector"},
+            {"name": "Weight (%)", "id": "Weight (%)", "type": "numeric", "format": dash_table.Format.Format(precision=1, scheme=dash_table.Format.Scheme.fixed)},
+            {"name": "Absolute Change", "id": "Absolute Change", "type": "numeric", "format": dash_table.Format.Format(group=",", precision=0, scheme=dash_table.Format.Scheme.fixed)},
+            {"name": "Relative Change (%)", "id": "Relative Change (%)", "type": "numeric", "format": dash_table.Format.Format(precision=2, scheme=dash_table.Format.Scheme.fixed, symbol=dash_table.Format.Symbol.yes, symbol_suffix='%').sign(dash_table.Format.Sign.positive)},
+        ],
+        data=df.to_dict('records'),
+        sort_action="native",
+        style_table={'overflowX': 'auto'},
+        style_header={'backgroundColor': COLOR_PALETTE['grey'], 'color': 'white', 'fontWeight': 'bold'},
+        style_cell={'textAlign': 'left', 'padding': '5px', 'whiteSpace': 'normal', 'height': 'auto', 'fontFamily': 'Arial, sans-serif', 'textAlign': 'left', 'padding': '5px', 'whiteSpace': 'normal', 'height': 'auto'},
+        style_data_conditional=[
+            {'if': {'column_id': 'Absolute Change', 'filter_query': '{Absolute Change} < 0'}, 'color': COLOR_PALETTE['red']},
+            {'if': {'column_id': 'Relative Change (%)', 'filter_query': '{Relative Change (%)} < 0'}, 'color': COLOR_PALETTE['red']}
+        ]
+    )
+
+    # Create the summary footer
+    total_abs_change = total_after - total_before
+    total_rel_change = (total_abs_change / total_before) * 100 if total_before > 1e-9 else 0
+
+    summary_style = {'fontSize': '1.2em', 'fontWeight': 'bold', 'padding': '10px', 'borderTop': '2px solid black', 'marginTop': '20px'}
+    summary = html.Div([
+        html.H4("Total Portfolio Impact"),
+        html.Table([
+            html.Tr([
+                html.Td("Total Absolute Change:", style={'paddingRight': '20px'}),
+                html.Td(f"{total_abs_change:,.0f}", style={'color': COLOR_PALETTE['red'] if total_abs_change < 0 else COLOR_PALETTE['green']})
+            ]),
+            html.Tr([
+                html.Td("Total Relative Change:", style={'paddingRight': '20px'}),
+                html.Td(f"{total_rel_change:.2f}%", style={'color': COLOR_PALETTE['red'] if total_rel_change < 0 else COLOR_PALETTE['green']})
+            ])
+        ])
+    ], style=summary_style)
+
+    return html.Div([
+        html.H3("Individual Asset Impacts"),
+        table,
+        summary
+    ])
+
 def create_top_impacts_table(delta_x, X_df, shock_maps, country_mapping, COLOR_PALETTE):
     """
     Creates a DataTable showing the top 100 most impacted sectors globally.
@@ -306,6 +471,7 @@ def create_top_impacts_table(delta_x, X_df, shock_maps, country_mapping, COLOR_P
             'fontWeight': 'bold'
         },
         style_cell={
+            'fontFamily': 'Arial, sans-serif',
             'textAlign': 'left',
             'padding': '5px',
             'whiteSpace': 'normal',

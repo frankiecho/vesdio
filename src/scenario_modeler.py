@@ -211,6 +211,55 @@ def attribute_output_change(model_method, delta_x, shock_maps, home_region, home
     
     return attribution
 
+def attribute_portfolio_change(model_method, delta_x, shock_maps, portfolio_data, L_df=None, G_df=None, A_df=None):
+    """
+    Attributes the change in a portfolio's total value to the initial shock(s).
+    It calculates the weighted contribution of each shock to each portfolio asset and sums them up.
+    """
+    total_portfolio_impact = 0
+    portfolio_causes = {}
+
+    shock_labels = pd.MultiIndex.from_tuples([(s['region'], s['sector']) for s in shock_maps])
+    initial_shocks = delta_x[delta_x.index.isin(shock_labels)].abs()
+
+    # Iterate through each asset in the portfolio
+    for asset in portfolio_data:
+        home_label = (asset['region'], asset['sector'])
+        asset_weight = asset['weight'] / 100.0
+        total_portfolio_impact += abs(delta_x.loc[home_label]) * asset_weight
+
+        # Calculate the contribution of each external shock to this specific asset
+        asset_impact_causes = {}
+        if model_method == 'leontief' and L_df is not None:
+            for shock_label, shock_value in initial_shocks.items():
+                contribution = L_df.loc[home_label, shock_label] * shock_value
+                asset_impact_causes[f"{shock_label[0]} - {shock_label[1]}"] = contribution
+        elif model_method == 'ghosh' and G_df is not None:
+            for shock_label, shock_value in initial_shocks.items():
+                contribution = G_df.loc[shock_label, home_label] * shock_value
+                asset_impact_causes[f"{shock_label[0]} - {shock_label[1]}"] = contribution
+        
+        # Add the weighted contributions to the overall portfolio causes
+        for cause, impact in asset_impact_causes.items():
+            portfolio_causes[cause] = portfolio_causes.get(cause, 0) + (impact * asset_weight)
+
+    if total_portfolio_impact < 1e-10:
+        return {
+            'message': 'No significant output change in your portfolio.',
+            'total_impact': 0,
+            'causes': {}
+        }
+
+    # Normalize to 100%
+    total_attributed = sum(portfolio_causes.values())
+    attribution = {
+        'total_impact': total_portfolio_impact,
+        'causes': {label: (impact / total_attributed) * 100 if total_attributed > 0 else 0
+                   for label, impact in sorted(portfolio_causes.items(), key=lambda item: item[1], reverse=True)},
+        'message': 'Change in Total Portfolio Value'
+    }
+    return attribution
+
 def is_dask(data):
     return isinstance(data, (dd.DataFrame, dd.Series, da.Array))
 
