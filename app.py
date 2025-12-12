@@ -42,7 +42,7 @@ dropdown_style = {
 
 years = list(range(1995, 2022))
 
-app.layout = html.Div(style={'fontFamily': 'Arial, sans-serif'}, children=[
+app.layout = html.Div(style={'fontFamily': 'Arial, sans-serif', 'height': '100vh', 'display': 'flex', 'flexDirection': 'column'}, children=[
     # Top Menu Bar
     html.Div(
         style={
@@ -51,7 +51,8 @@ app.layout = html.Div(style={'fontFamily': 'Arial, sans-serif'}, children=[
             'padding': '10px 40px',
             'display': 'flex',
             'alignItems': 'center',
-            'justifyContent': 'space-between'
+            'justifyContent': 'space-between',
+            'flexShrink': 0 # Prevent the bar from shrinking
         },
         children=[
             html.H1("VESD.IO", style={'margin': 0, 'fontSize': '24px'}),
@@ -60,7 +61,7 @@ app.layout = html.Div(style={'fontFamily': 'Arial, sans-serif'}, children=[
     ),
 
     # Main Content Area
-    html.Div(style={'padding': '20px'}, children=[
+    html.Div(style={'padding': '20px', 'overflowY': 'auto', 'flexGrow': 1}, children=[
         # Left column for controls
         # This dcc.Store holds the list of shocks for the scenario builder
         dcc.Store(id='scenario-store', storage_type='memory', data=[]),
@@ -378,7 +379,7 @@ app.layout = html.Div(style={'fontFamily': 'Arial, sans-serif'}, children=[
                 ]),
                 # Body with instructions
                 dcc.Markdown('''
-                    Welcome to the Valuing Ecosystem Service Dependencies with Input-Output (VESD.IO) tool. This application helps you simulate the economic impacts of supply chain disruptions.
+                    Welcome to the Valuing Ecosystem Service Dependencies with Input-Output (VESD.IO) tool. This application helps you simulate the economic impacts of ecosystem services and supply chain disruptions.
 
                     #### **Step 1: Set Your Perspective**
                     In the "Your Position / Portfolio" panel, choose how you want to analyze impacts:
@@ -418,6 +419,10 @@ app.layout = html.Div(style={'fontFamily': 'Arial, sans-serif'}, children=[
                     The link between ecosystem services and sector production is calculated through materiality ratings in the ENCORE database. Sectors with "High" or "Very High" materiality to an ecosystem services are assumed to have production decreased in proportion to the specified magnitude of production disruption. Sectors without a "High" or "Very High" materiality rating to an ecosystem service is assumed to be unaffected.
                              
                     ENCORE citation: Global Canopy and UNEP (2025). Exploring Natural Capital Opportunities, Risk and Exposure (June 2025 update). https://encorenature.org/en
+                             
+                    #### Disclaimer
+                    
+                    This tool is in its experimental phase and is not yet fully tested and validated. It does not come with warranty. Use at your own risk.
                 ''')
             ])
         ]
