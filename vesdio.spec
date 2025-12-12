@@ -4,7 +4,7 @@ import sys
 import os
 from pathlib import Path
 from dotenv import load_dotenv
-from PyInstaller.utils.hooks import collect_data_files
+from PyInstaller.utils.hooks import collect_data_files, copy_metadata
 
 # Load .env file to get DATA_DIR for the build process
 load_dotenv()
@@ -17,9 +17,13 @@ block_cipher = None
 datas = [ (os.getenv('DATA_DIR', 'data'), 'data') ]
 
 # Add data files from pandas, plotly, and dask to ensure they are bundled correctly.
-datas += collect_data_files('pandas')
 datas += collect_data_files('plotly')
 datas += collect_data_files('dask')
+datas += collect_data_files('pandas')
+
+# Explicitly include package metadata that dask checks for at runtime.
+datas += copy_metadata('pandas')
+datas += copy_metadata('pyarrow')
 
 # --- Hidden Imports ---
 # PyInstaller sometimes fails to detect imports from certain libraries.
@@ -49,5 +53,5 @@ a = Analysis(
     cipher=block_cipher,
 )
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
-exe = EXE(pyz, a.scripts, a.binaries, a.zipfiles, a.datas, name='vesdio', debug=False, strip=False, upx=True, console=True, icon='assets/logo.ico')
+exe = EXE(pyz, a.scripts, a.binaries, a.zipfiles, a.datas, name='vesdio', debug=False, strip=False, upx=True, console=True, icon='assets/favicon.ico')
 coll = COLLECT(exe, a.binaries, a.zipfiles, a.datas, strip=False, upx=True, upx_exclude=[], name='vesdio_dist')
