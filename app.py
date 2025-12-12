@@ -17,7 +17,6 @@ from threading import Timer
 from src.data_loader import load_labels_data, load_mrio_matrices, load_production_history, load_encore_materiality
 from src.callbacks import handle_simulation_results
 from src.config import country_mapping, COUNTRY_CODES_3_LETTER, COLOR_PALETTE, get_valid_region_groups
-from src.plotting import truncate_label, create_builder_historical_plot
 
 # --- 1. Load Data and Pre-compute --- #
 # Data will be loaded within the callback based on the selected year
@@ -25,10 +24,12 @@ from src.plotting import truncate_label, create_builder_historical_plot
 # --- 2. Initialize Dash App --- #
 app = dash.Dash(__name__,
     suppress_callback_exceptions=True,
-    external_stylesheets=[{
-        'href': 'https://codepen.io/chriddyp/pen/bWLwgP.css',
-        'rel': 'stylesheet'
-    }]
+    external_stylesheets=[
+        # Default Dash stylesheet
+        'https://codepen.io/chriddyp/pen/bWLwgP.css',
+        # Custom styles for dropdowns and other elements
+        '/assets/custom.css'
+    ]
 )
 server = app.server
 
@@ -55,7 +56,10 @@ app.layout = html.Div(style={'fontFamily': 'Arial, sans-serif', 'height': '100vh
             'flexShrink': 0 # Prevent the bar from shrinking
         },
         children=[
-            html.H1("VESD.IO", style={'margin': 0, 'fontSize': '24px'}),
+            html.Div(style={'display': 'flex', 'alignItems': 'center'}, children=[
+                html.Img(src='/assets/ms-icon-310x310.png', style={'height': '50px', 'marginRight': '15px'}),
+                html.H1("VESDIO", style={'margin': 0, 'fontSize': '24px'}),
+            ]),
             html.Button("Instructions", id="open-instructions-button", n_clicks=0, className='button-primary')
         ]
     ),
@@ -96,15 +100,13 @@ app.layout = html.Div(style={'fontFamily': 'Arial, sans-serif', 'height': '100vh
                 ]),
                 # Portfolio Mode Controls
                 html.Div(id='portfolio-controls', style={'display': 'none'}, children=[
-                    html.Div(className='row', style={'marginTop': '10px'}, children=[
-                        html.Div(className='six columns', children=[
-                            html.Label("Region:"),
-                            dcc.Dropdown(id='portfolio-region-select')
-                        ]),
-                        html.Div(className='six columns', children=[
+                    html.Div(children=[
+                        html.Label("Region:"),
+                        dcc.Dropdown(id='portfolio-region-select')
+                    ]),
+                    html.Div(children=[
                             html.Label("Sector:"),
                             dcc.Dropdown(id='portfolio-sector-select')
-                        ]),
                     ]),
                     html.Label("Portfolio Weight (%):"),
                     dcc.Input(id='portfolio-weight-input', type='number', min=0.1, max=100, step=0.1, value=10, style={'width': '100%'}),
@@ -375,11 +377,11 @@ app.layout = html.Div(style={'fontFamily': 'Arial, sans-serif', 'height': '100vh
                 # Header
                 html.Div([
                     html.Span("×", id="instructions-modal-close-button", style={'color': '#aaa', 'float': 'right', 'fontSize': '28px', 'fontWeight': 'bold', 'cursor': 'pointer'}),
-                    html.H2("How to Use VESD.IO"),
+                    html.H2("How to Use VESDIO"),
                 ]),
                 # Body with instructions
                 dcc.Markdown('''
-                    Welcome to the Valuing Ecosystem Service Dependencies with Input-Output (VESD.IO) tool. This application helps you simulate the economic impacts of ecosystem services and supply chain disruptions.
+                    Welcome to the Valuing Ecosystem Service Dependencies with Input-Output (VESDIO) tool. This application helps you simulate the economic impacts of ecosystem services and supply chain disruptions.
 
                     #### **Step 1: Set Your Perspective**
                     In the "Your Position / Portfolio" panel, choose how you want to analyze impacts:
@@ -469,7 +471,7 @@ def update_dropdowns(year):
     ] + country_options
 
     # Sector options
-    sector_options = [{'label': truncate_label(s), 'value': s} for s in SECTORS]
+    sector_options = [{'label': s, 'value': s} for s in SECTORS]
 
     # Add ecosystem services options for the dropdown
     encore_materiality = load_encore_materiality()
@@ -894,16 +896,21 @@ def run_and_update_all_results(n_clicks, year, position_mode, portfolio_data, ho
     )
 
 if __name__ == '__main__':
+    # Determine if running as a bundled executable
+    is_frozen = getattr(sys, 'frozen', False)
+    debug_mode = not is_frozen
+
     host = "127.0.0.1"
     port = 8050
     url = f"http://{host}:{port}"
 
     def open_browser():
-        webbrowser.open_new(url) 
+        webbrowser.open_new(url)
 
-    # The reloader will run this script twice. We only want to open the browser on the first run.
-    if not os.environ.get("WERKZEUG_RUN_MAIN"):
+    # For a bundled app, or when not in debug mode, open the browser directly.
+    # For debug mode, only open it in the main Werkzeug process to avoid multiple tabs.
+    if is_frozen or not os.environ.get("WERKZEUG_RUN_MAIN"):
         Timer(1, open_browser).start()
-        
+
     print(f"Application ready. Starting server on {url}")
-    app.run(host=host, port=port, debug=True)
+    app.run(host=host, port=port, debug=debug_mode)

@@ -1,0 +1,10 @@
+/* assets/custom.css */
+
+/*
+  This rule targets the individual options within a dcc.Dropdown menu.
+  It allows text to wrap and increases the vertical padding to make each
+  option taller, which prevents wrapped text from looking cramped.
+*/
+.Select-menu-outer .Select-option {
+    padding: 8px 12px;
+}

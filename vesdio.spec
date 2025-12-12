@@ -14,7 +14,8 @@ block_cipher = None
 # --- Data files to be bundled ---
 # It bundles the directory specified by DATA_DIR in your .env file (or 'data' by default).
 # The destination inside the package will always be 'data'.
-datas = [ (os.getenv('DATA_DIR', 'data'), 'data') ]
+datas = [ (os.getenv('DATA_DIR', 'data'), 'data'),
+          (str(Path(__name__).parent / 'assets'), 'assets') ]
 
 # Add data files from pandas, plotly, and dask to ensure they are bundled correctly.
 datas += collect_data_files('plotly')
