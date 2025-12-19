@@ -15,6 +15,59 @@ It helps businesses:
 
 VESDIO is particularly useful for companies that have an initial idea of which ecosystem services they are materially dependent on, using tools like ENCORE heatmapping, but need further information to motivate action, based on how much (the broad magnitude) of that risk, the sectors causing that risk in their value chain, and where are these sectors located globally. These information can then help users prioritize focal areas and sectors for in-depth scenario analysis mandated under the TNFD "Assess" phase in its LEAP (Locate, Evaluate, Assess and Prepare) approach.
 
+## Installation
+
+Follow these steps to set up and run VESDIO on your local machine.
+
+**Prerequisites:**
+- [Mamba](https://mamba.readthedocs.io/en/latest/) or Miniconda/Anaconda is highly recommended.
+- Git
+
+**Step 1: Clone the Repository**
+```bash
+git clone https://github.com/frankiecho/vesdio.git
+cd vesdio
+```
+
+**Step 2: Create and Activate Environment**
+This command will create a new environment named `vesdio` with the necessary Python version and activate it. Using Mamba is strongly advised to ensure correct installation of complex data science libraries.
+```bash
+# We recommend using Mamba for a faster and more reliable installation
+mamba create -n vesdio python=3.9 -c conda-forge --yes
+mamba activate vesdio
+```
+
+**Step 3: Install Dependencies**
+Install all required Python packages into the active environment using the `requirements.txt` file.
+```bash
+mamba install --file requirements.txt --yes
+```
+
+**Step 4: Data Ingestion**
+The application requires external datasets (EXIOBASE and ENCORE) to function. The following scripts will download and process this data.
+
+**Important:** This is a one-time setup process that can be time-consuming and require significant disk space. The scripts are configured via environment variables (e.g., in a `.env` file) to specify the years of data to ingest. 
+
+In `.env`, specify the absolute path of where you want the data files to go in your system using the variable `DATA_DIR`. For example, if you want the data files to go into `C:/Documents/vesdio`, modify the `.env` file to the following:
+
+```
+DATA_DIR=C:/Documents/vesdio
+```
+
+Afterwards, run the data ingestion script in Python to ingest the EXIOBASE and ENCORE files needed.
+
+```bash
+python ingest_exiobase.py
+python ingest_encore.py
+```
+
+**Step 5: Run the Application**
+Once the setup is complete, you can start the Dash web application.
+```bash
+python app.py
+```
+Open your web browser and navigate to `http://127.0.0.1:8050` to use the tool.
+
 ## Methodology
 
 ### Data sources

@@ -9,7 +9,7 @@ load_dotenv()
 
 CURRENT_DIR = Path(__file__).parent
 
-EXIOBASE_DIR = Path(os.getenv('ENCORE_DATA_DIR', CURRENT_DIR / 'ENCORE_data'))
+EXIOBASE_DIR = Path(os.getenv('DATA_DIR', CURRENT_DIR))  / 'ENCORE_data'
 
 # Load dependency materiality ratings
 def load_dependency_materiality_ratings():
