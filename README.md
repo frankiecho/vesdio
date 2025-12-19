@@ -24,7 +24,7 @@ VESDIO is particularly useful for companies that have an initial idea of which e
 
 Note that VESDIO is not (yet) endorsed by the TNFD or part of the recommended toolkits for TNFD disclosures. 
 
-Note on materiality: VESDIO currently also does not have any "materiality" thresholds that give businesses an answer to whether an ecosystem service is "financially material" to the business or not, and is not ready for being directly interpreted as an indicator for financial materiality. The quantitative outputs of VESDIO needs to be further interpreted based on the business context to determine appropriate thresholds for materiality for use in different sectors and geographies based on VESDIO outputs.
+Note on materiality: VESDIO currently also does not have any "materiality" thresholds that give businesses an answer to whether an ecosystem service is "financially material" to the business or not, and is not ready for being directly interpreted as an indicator for financial materiality. The quantitative outputs of VESDIO needs to be further interpreted based on the business context to determine appropriate thresholds for materiality for use in different sectors and geographies.
 
 ## Installation
 
