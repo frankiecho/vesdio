@@ -2,9 +2,16 @@
 
 VESDIO is an interactive tool for conducting scenario analysis ('what if' analyses) to quantify how much ecosystem services disruption can affect production in your chosen business sector/ region and portfolio through global supply chains.
 
+For example, it answers questions like:
+- How much will a water supply stress in China reduce production outputs in my car manufacturing plant in Germany?
+- How much will a global pollination services decline of 20% cause reduced production in my portfolio, where 30% of the assets are of a food processing facility in the United States?
+- How did the water supply stress in China affect my car manufacturing plant in Germany - how much of it came from disruptions to mineral mining operations?
+
+This gives businesses a quantitative indicator for determining how important are ecosystem services in sustaining their operations.
+
 ## Supporting nature dependency disclosures
 
-VESDIO was designed to support Taskforce for Nature-related Financial Disclosures (TNFD) disclosures, helping businesses gain a concrete measure of how dependent they are in nature's ecosystem services and identify where (in location and sector) are nature-related dependencies to their operations coming from. Currently it is not endorsed by the TNFD or part of the recommended toolkits for TNFD disclosures.
+VESDIO was designed to support Taskforce for Nature-related Financial Disclosures (TNFD) disclosures, helping businesses gain a concrete measure of how dependent they are in nature's ecosystem services and identify where (in location and sector) are nature-related dependencies to their operations coming from. 
 
 It helps businesses:
 
@@ -14,6 +21,10 @@ It helps businesses:
 - Compare your chosen scenarios against historical benchmarks
 
 VESDIO is particularly useful for companies that have an initial idea of which ecosystem services they are materially dependent on, using tools like ENCORE heatmapping, but need further information to motivate action, based on how much (the broad magnitude) of that risk, the sectors causing that risk in their value chain, and where are these sectors located globally. These information can then help users prioritize focal areas and sectors for in-depth scenario analysis mandated under the TNFD "Assess" phase in its LEAP (Locate, Evaluate, Assess and Prepare) approach.
+
+Note that VESDIO is not (yet) endorsed by the TNFD or part of the recommended toolkits for TNFD disclosures. 
+
+Note on materiality: VESDIO currently also does not have any "materiality" thresholds that give businesses an answer to whether an ecosystem service is "financially material" to the business or not, and is not ready for being directly interpreted as an indicator for financial materiality. The quantitative outputs of VESDIO needs to be further interpreted based on the business context to determine appropriate thresholds for materiality for use in different sectors and geographies based on VESDIO outputs.
 
 ## Installation
 
