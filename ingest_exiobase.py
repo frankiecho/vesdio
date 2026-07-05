@@ -227,7 +227,9 @@ def ingest_and_save_exiobase(year=2021, float32=None):
 
     # Find the largest inter-country, inter-sector dependency.
     # We loop to ensure we don't pick a scenario where the shock and home sectors are the same.
-    temp_L = L_filtered.to_numpy()
+    # copy=True: recent pandas can return a read-only view from .to_numpy() for a
+    # boolean-masked/sliced DataFrame, and we mutate temp_L in-place below.
+    temp_L = L_filtered.to_numpy(copy=True)
     max_dependency = 0
     
     for _ in range(10): # Try up to 10 times to find a valid pair
