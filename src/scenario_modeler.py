@@ -202,13 +202,17 @@ def attribute_output_change(model_method, delta_x, shock_maps, home_region, home
 
     # Normalize the external causes to sum to 100%
     total_attributed_external = sum(external_causes.values())
+    sorted_external_causes = sorted(external_causes.items(), key=lambda item: item[1], reverse=True)
     attribution = {
         'total_impact': total_impact,
         'causes': {label: (impact / total_attributed_external) * 100 if total_attributed_external > 0 else 0
-                   for label, impact in sorted(external_causes.items(), key=lambda item: item[1], reverse=True)},
+                   for label, impact in sorted_external_causes},
+        # Absolute (non-renormalized) contributions, in the same units as delta_x, so the
+        # true magnitude of each cause is still visible alongside the normalized percentages above.
+        'causes_absolute': {label: impact for label, impact in sorted_external_causes},
         'message': f'Change in Gross Output for {home_sector}'
     }
-    
+
     return attribution
 
 def attribute_portfolio_change(model_method, delta_x, shock_maps, portfolio_data, L_df=None, G_df=None, A_df=None):
@@ -252,10 +256,13 @@ def attribute_portfolio_change(model_method, delta_x, shock_maps, portfolio_data
 
     # Normalize to 100%
     total_attributed = sum(portfolio_causes.values())
+    sorted_portfolio_causes = sorted(portfolio_causes.items(), key=lambda item: item[1], reverse=True)
     attribution = {
         'total_impact': total_portfolio_impact,
         'causes': {label: (impact / total_attributed) * 100 if total_attributed > 0 else 0
-                   for label, impact in sorted(portfolio_causes.items(), key=lambda item: item[1], reverse=True)},
+                   for label, impact in sorted_portfolio_causes},
+        # Absolute (non-renormalized) contributions, in the same units as delta_x.
+        'causes_absolute': {label: impact for label, impact in sorted_portfolio_causes},
         'message': 'Change in Total Portfolio Value'
     }
     return attribution

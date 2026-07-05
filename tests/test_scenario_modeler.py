@@ -43,18 +43,38 @@ def test_ghosh_model_shock(dummy_mrio_data):
 
 def test_attribute_output_change(dummy_mrio_data):
     """
-    Test the attribution function to ensure it returns a valid structure.
-    """
-    A, X, Y, L = dummy_mrio_data['A'], dummy_mrio_data['X'], dummy_mrio_data['Y'], dummy_mrio_data['L']
-    shock_maps = [{'region': 'C1', 'sector': 'Farming', 'magnitude': 0.1}]
-    _, delta_x = run_physical_risk(A, X, Y, L, shock_maps)
+    Test the attribution function to ensure it returns a valid structure, using
+    the current `attribute_output_change(model_method, delta_x, shock_maps,
+    home_region, home_sector, L_df=None, G_df=None, A_df=None)` signature.
 
-    attribution = attribute_output_change(L, delta_x, 'C1', 'Food Processing')
+    The Ghosh (supply-side) model is used here because it correctly attributes
+    the downstream impact of an upstream supply shock in this dummy economy
+    (C1-Food Processing depends on C1-Farming), giving a non-trivial, checkable
+    'causes' breakdown.
+    """
+    A, X, G = dummy_mrio_data['A'], dummy_mrio_data['X'], dummy_mrio_data['G']
+    shock_maps = [{'region': 'C1', 'sector': 'Farming', 'magnitude': 0.1}]
+    _, delta_x = run_physical_risk_ghosh(A, X, G, shock_maps)
+
+    attribution = attribute_output_change(
+        'ghosh', delta_x, shock_maps, 'C1', 'Food Processing', G_df=G
+    )
 
     assert isinstance(attribution, dict)
     assert 'causes' in attribution
+    assert 'causes_absolute' in attribution
     assert 'total_impact' in attribution
-    
-    # The only external cause should be C1-Farming
+    assert 'message' in attribution
+
+    # The only external cause should be C1-Farming, normalized to 100% of the
+    # attributed external impact.
     assert 'C1 - Farming' in attribution['causes']
-    assert pytest.approx(sum(attribution['causes'].values()), 1) == 100.0
+    assert sum(attribution['causes'].values()) == pytest.approx(100.0)
+
+    # The absolute view should carry the same cause(s), unnormalized (in the
+    # original output-change units), and should sum to the home sector's total
+    # impact since C1-Farming is the only external cause here.
+    assert 'C1 - Farming' in attribution['causes_absolute']
+    assert sum(attribution['causes_absolute'].values()) == pytest.approx(
+        attribution['total_impact']
+    )
