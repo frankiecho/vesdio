@@ -179,6 +179,19 @@ app.layout = html.Div(style={'fontFamily': 'Arial, sans-serif', 'height': '100vh
                     marks={i: f'{i}%' for i in range(0, 101, 10)},
                     tooltip={"placement": "bottom", "always_visible": True}
                 ),
+                # NOTE (WS5 — swappable IO-database core): a "Data source" /
+                # database selector (e.g. dcc.Dropdown(id='provider-dropdown',
+                # options=[{'label': m.name, 'value': m.id} for m in
+                # src.providers.list_providers() if m.implemented], value=
+                # src.providers.DEFAULT_PROVIDER_ID)) would go here, right
+                # above the year selector. It is intentionally left
+                # unwired for now: EXIOBASE is the only implemented
+                # provider (see src/providers/__init__.py), and wiring a
+                # live selector would require threading a `provider_id`
+                # through get_cached_matrices/load_labels_data and every
+                # callback that currently assumes EXIOBASE's region/sector
+                # vocabulary (src/callbacks.py) — out of scope for this
+                # additive refactor.
                 html.Label("Select Year:"),
                 dcc.Dropdown(
                     id='year-dropdown',
