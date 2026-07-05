@@ -55,6 +55,12 @@ if __name__ == '__main__':
         print(f"Warning: After attempting group matching, {len(dep_mat_unjoined)} ENCORE sectors still could not be matched to EXIOBASE sectors:")
         print(dep_mat_unjoined.index.tolist())
 
+        # Surface the dropped rows in a diagnostics file (rather than only a console warning)
+        # so the loss of these ISIC->EXIOBASE dependencies is visible and reviewable.
+        unmatched_path = EXIOBASE_DIR / 'encore_unmatched.csv'
+        dep_mat_unjoined.to_csv(unmatched_path)
+        print(f"Unmatched ENCORE sectors written to {unmatched_path} for review.")
+
     # Get the list of ecosystem services
     ecosystem_services = list(dep_mat.columns)
     ecosystem_services = [es for es in ecosystem_services if 'ISIC' not in es and es != 'EXIOBASE Sector']
