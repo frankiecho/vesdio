@@ -10,3 +10,4 @@ PyYAML
 dash-bootstrap-components
 pytest
 scipy
+pywebview

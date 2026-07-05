@@ -37,8 +37,21 @@ hiddenimports = [
     'dask.array',
     'dask.dataframe',
     'dask.bag',
-    'pyarrow'
+    'pyarrow',
+    'webview',
 ]
+
+# pywebview picks its native GUI backend at import time, and PyInstaller
+# needs it as an explicit hidden import per platform (its imports are
+# conditional, so static analysis misses them). Builds are done per-OS, so
+# pick the backend for whichever platform this spec is being built on.
+# See docs/PACKAGING.md for the required system/backend dependencies.
+if sys.platform.startswith('win'):
+    hiddenimports += ['webview.platforms.winforms', 'clr']
+elif sys.platform == 'darwin':
+    hiddenimports += ['webview.platforms.cocoa']
+else:
+    hiddenimports += ['webview.platforms.gtk', 'webview.platforms.qt']
 
 a = Analysis(
     ['app.py'],
