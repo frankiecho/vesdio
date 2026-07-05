@@ -8,5 +8,6 @@ pymrio
 python-dotenv
 PyYAML
 dash-bootstrap-components
+dash-mantine-components
 pytest
 scipy
