@@ -1,0 +1,179 @@
+/* assets/design-system.css
+ *
+ * VESDIO design system — single source of truth for design tokens (CSS side).
+ * Mirrors src/design_tokens.py; keep both in sync (see technical_documentation.md).
+ *
+ * Brand colors are the Okabe-Ito colorblind-safe palette (src/config.py) and are
+ * intentionally IDENTICAL across light/dark themes so Plotly charts and on-page
+ * swatches always agree. Surface/text/border neutrals adapt per theme.
+ */
+
+:root {
+  /* ---------------------------------------------------------------------
+   * Brand colors (Okabe-Ito palette) — do not alter these hex values.
+   * ------------------------------------------------------------------- */
+  --color-blue: #0072B2;
+  --color-red: #D55E00;
+  --color-amber: #E69F00;
+  --color-beige: #F0E442;
+  --color-green: #009E73;
+  --color-grey: #999999;
+
+  /* Semantic aliases onto the brand colors above. */
+  --color-accent: #0072B2;    /* Okabe-Ito Blue */
+  --color-negative: #D55E00;  /* Okabe-Ito Vermillion */
+  --color-positive: #009E73;  /* Okabe-Ito Bluish Green */
+  --color-warning: #E69F00;   /* Okabe-Ito Orange */
+  --color-highlight: #F0E442; /* Okabe-Ito Yellow */
+  --color-neutral: #999999;   /* Okabe-Ito Grey */
+
+  /* ---------------------------------------------------------------------
+   * Neutral ramp — 9 steps, replaces ad-hoc greys (#f0f0f0/#ddd/#ccc/#888/#f9f9f9).
+   * ------------------------------------------------------------------- */
+  --color-grey-100: #F7F7F7;
+  --color-grey-200: #EEEEEE;
+  --color-grey-300: #E0E0E0;
+  --color-grey-400: #CCCCCC;
+  --color-grey-500: #999999;
+  --color-grey-600: #757575;
+  --color-grey-700: #555555;
+  --color-grey-800: #333333;
+  --color-grey-900: #1A1A1A;
+
+  /* ---------------------------------------------------------------------
+   * Theme surfaces — light mode default.
+   * ------------------------------------------------------------------- */
+  --color-bg: #FFFFFF;
+  --color-bg-subtle: var(--color-grey-100);
+  --color-surface: #FFFFFF;
+  --color-surface-raised: #FFFFFF;
+  --color-border: var(--color-grey-300);
+  --color-border-strong: var(--color-grey-400);
+  --color-text: var(--color-grey-900);
+  --color-text-muted: var(--color-grey-700);
+  --color-text-on-accent: #FFFFFF;
+
+  /* ---------------------------------------------------------------------
+   * Spacing scale — 4px base.
+   * ------------------------------------------------------------------- */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+  --space-16: 64px;
+
+  /* ---------------------------------------------------------------------
+   * Type scale.
+   * ------------------------------------------------------------------- */
+  --font-family-base: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-family-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  --font-size-xs: 0.75rem;   /* 12px */
+  --font-size-sm: 0.875rem;  /* 14px */
+  --font-size-base: 1rem;    /* 16px */
+  --font-size-md: 1.125rem;  /* 18px */
+  --font-size-lg: 1.25rem;   /* 20px */
+  --font-size-xl: 1.5rem;    /* 24px */
+  --font-size-2xl: 1.875rem; /* 30px */
+  --font-size-3xl: 2.25rem;  /* 36px */
+
+  --font-weight-normal: 400;
+  --font-weight-medium: 500;
+  --font-weight-bold: 700;
+
+  --line-height-tight: 1.2;
+  --line-height-normal: 1.5;
+  --line-height-relaxed: 1.75;
+
+  /* ---------------------------------------------------------------------
+   * Radii.
+   * ------------------------------------------------------------------- */
+  --radius-sm: 2px;
+  --radius-md: 4px;
+  --radius-lg: 8px;
+  --radius-xl: 16px;
+  --radius-full: 9999px;
+
+  /* ---------------------------------------------------------------------
+   * Elevation / shadow.
+   * ------------------------------------------------------------------- */
+  --shadow-sm: 0 1px 2px rgba(26, 26, 26, 0.08);
+  --shadow-md: 0 2px 8px rgba(26, 26, 26, 0.12);
+  --shadow-lg: 0 8px 24px rgba(26, 26, 26, 0.16);
+  --shadow-xl: 0 16px 48px rgba(26, 26, 26, 0.20);
+
+  /* ---------------------------------------------------------------------
+   * Z-index scale.
+   * ------------------------------------------------------------------- */
+  --z-base: 0;
+  --z-dropdown: 1000;
+  --z-sticky: 1100;
+  --z-modal-backdrop: 1200;
+  --z-modal: 1300;
+  --z-popover: 1400;
+  --z-tooltip: 1500;
+  --z-toast: 1600;
+}
+
+/* ---------------------------------------------------------------------
+ * Dark theme — via OS preference or an explicit [data-theme] override.
+ * Brand/semantic colors above are intentionally left unchanged; only
+ * surface/text/border neutrals invert.
+ * ------------------------------------------------------------------- */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-bg: var(--color-grey-900);
+    --color-bg-subtle: #141414;
+    --color-surface: #232323;
+    --color-surface-raised: #2B2B2B;
+    --color-border: var(--color-grey-700);
+    --color-border-strong: var(--color-grey-600);
+    --color-text: var(--color-grey-100);
+    --color-text-muted: var(--color-grey-400);
+    --color-text-on-accent: #FFFFFF;
+
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.40);
+    --shadow-md: 0 2px 8px rgba(0, 0, 0, 0.45);
+    --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.50);
+    --shadow-xl: 0 16px 48px rgba(0, 0, 0, 0.55);
+  }
+}
+
+:root[data-theme="dark"] {
+  --color-bg: var(--color-grey-900);
+  --color-bg-subtle: #141414;
+  --color-surface: #232323;
+  --color-surface-raised: #2B2B2B;
+  --color-border: var(--color-grey-700);
+  --color-border-strong: var(--color-grey-600);
+  --color-text: var(--color-grey-100);
+  --color-text-muted: var(--color-grey-400);
+  --color-text-on-accent: #FFFFFF;
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.40);
+  --shadow-md: 0 2px 8px rgba(0, 0, 0, 0.45);
+  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.50);
+  --shadow-xl: 0 16px 48px rgba(0, 0, 0, 0.55);
+}
+
+:root[data-theme="light"] {
+  --color-bg: #FFFFFF;
+  --color-bg-subtle: var(--color-grey-100);
+  --color-surface: #FFFFFF;
+  --color-surface-raised: #FFFFFF;
+  --color-border: var(--color-grey-300);
+  --color-border-strong: var(--color-grey-400);
+  --color-text: var(--color-grey-900);
+  --color-text-muted: var(--color-grey-700);
+  --color-text-on-accent: #FFFFFF;
+
+  --shadow-sm: 0 1px 2px rgba(26, 26, 26, 0.08);
+  --shadow-md: 0 2px 8px rgba(26, 26, 26, 0.12);
+  --shadow-lg: 0 8px 24px rgba(26, 26, 26, 0.16);
+  --shadow-xl: 0 16px 48px rgba(26, 26, 26, 0.20);
+}

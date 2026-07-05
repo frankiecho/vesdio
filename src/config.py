@@ -2,6 +2,8 @@
 
 # This file contains static configuration data for the application.
 
+from src.design_tokens import COLORS
+
 # Mapping from 2-letter country codes to full names
 country_mapping = {
     "AT": "Austria", "BE": "Belgium", "BG": "Bulgaria", "CY": "Cyprus", "CZ": "Czechia",
@@ -30,14 +32,16 @@ COUNTRY_CODES_3_LETTER = {
 }
 
 # Color Palette for consistent styling across all charts
-# Okabe-Ito colorblind-friendly palette
+# Okabe-Ito colorblind-friendly palette. Derived from src/design_tokens.py
+# (single source of truth, shared with assets/design-system.css) so charts
+# and CSS never drift; keys/values are unchanged from before the refactor.
 COLOR_PALETTE = {
-    'blue': "#0072B2",      # Neutral/Base color (Okabe-Ito Blue)
-    'red': "#D55E00",       # Impact/Negative color (Okabe-Ito Vermillion)
-    'amber': "#E69F00",     # Highlight color for scales (Okabe-Ito Orange)
-    'beige': "#F0E442",     # Secondary highlight for scales (Okabe-Ito Yellow)
-    'green': "#009E73",      # Positive change color (Okabe-Ito Bluish Green)
-    'grey': "#999999",      # For "Others" category (Grey)
+    'blue': COLORS['brand']['blue'],    # Neutral/Base color (Okabe-Ito Blue)
+    'red': COLORS['brand']['red'],      # Impact/Negative color (Okabe-Ito Vermillion)
+    'amber': COLORS['brand']['amber'],  # Highlight color for scales (Okabe-Ito Orange)
+    'beige': COLORS['brand']['beige'],  # Secondary highlight for scales (Okabe-Ito Yellow)
+    'green': COLORS['brand']['green'],  # Positive change color (Okabe-Ito Bluish Green)
+    'grey': COLORS['brand']['grey'],    # For "Others" category (Grey)
 }
 
 # Groupings for aggregated regions for shock scenarios
