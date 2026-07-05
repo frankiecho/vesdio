@@ -1,3 +1,27 @@
+"""
+EXIOBASE 3 ingestion.
+
+This is today's only concrete ingest pipeline: download/parse EXIOBASE 3 via
+`pymrio.parse_exiobase3`, then hand the parsed matrices + labels off to
+`save_mrio_provider_bundle()` below, which writes the standard per-year
+`<prefix>_<matrix>.parquet` + `labels.json` bundle that
+`src.providers.exiobase.ExiobaseProvider` (and, generically,
+`src.providers.base.MRIOProvider`) expects to read.
+
+Extension point for Workstream 5 (swappable IO-database core): a future
+`ingest_<db>.py` for e.g. OECD ICIO / GLORIA / WIOD should follow the same
+shape —
+  1. obtain/parse that database (pymrio already ships `parse_oecd` and
+     `parse_wiod` parsers; GLORIA would need a custom parser),
+  2. derive A, L, G, X, Y, E in the same (region, sector) MultiIndex layout
+     used here,
+  3. call `save_mrio_provider_bundle(output_dir, prefix, matrices, labels_data)`
+     to persist them,
+  4. add a corresponding `<Db>Provider(MRIOProvider)` in `src/providers/`
+     (see `src/providers/exiobase.py` as the reference implementation) and
+     register it in `src/providers/__init__.py`.
+No other application code needs to change to support a new provider.
+"""
 import pymrio
 import pandas as pd
 import numpy as np
@@ -21,6 +45,31 @@ YEAR_END = int(os.getenv('YEAR_END', '2021'))
 # Ensure directories exist
 RAW_DATA_DIR.mkdir(exist_ok=True)
 EXIOBASE_DIR.mkdir(exist_ok=True)
+
+def save_mrio_provider_bundle(output_dir, prefix, matrices, labels_data):
+    """
+    Generic "persist a parsed MRIO provider's matrices" step, factored out of
+    the EXIOBASE-specific ingest below so a future provider's ingest script
+    can reuse it instead of reimplementing the save + labels logic.
+
+    - output_dir: per-year directory, e.g. data/exiobase/2021
+    - prefix: file-naming prefix, e.g. "EXIOBASE" -> EXIOBASE_A.parquet
+      (kept as a parameter, rather than hardcoded, so a new provider can use
+      its own prefix while reusing this function)
+    - matrices: dict of {matrix_name: DataFrame}, e.g.
+      {'A': A_df, 'L': L_df, 'G': G_df, 'Y': Y_df, 'E': E_df, 'X': X_df}
+    - labels_data: dict with 'countries', 'sectors', 'labels', 'defaults'
+      (see ExiobaseProvider.load_labels / labels.json schema)
+    """
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    for matrix_name, df in matrices.items():
+        df.to_parquet(output_dir / f'{prefix}_{matrix_name}.parquet')
+
+    with open(output_dir / 'labels.json', 'w') as f:
+        json.dump(labels_data, f, indent=4)
+
 
 def ingest_and_save_exiobase(year=2021):
     """
@@ -192,20 +241,11 @@ def ingest_and_save_exiobase(year=2021):
         default_shock_region = regions[1] if len(regions) > 1 else regions[0]
         default_shock_sector = sectors[1] if len(sectors) > 1 else sectors[0]
 
-    # --- 7. Save Processed Data ---
+    # --- 7 & 8. Save Processed Data, Labels and Defaults ---
     output_dir = EXIOBASE_DIR / str(year)
-    output_dir.mkdir(exist_ok=True)
     print(f"Saving processed matrices to {output_dir}")
-    
-    A_df.to_parquet(output_dir / 'EXIOBASE_A.parquet')
-    L_df.to_parquet(output_dir / 'EXIOBASE_L.parquet')
-    G_df.to_parquet(output_dir / 'EXIOBASE_G.parquet')
-    Y_df.to_parquet(output_dir / 'EXIOBASE_Y.parquet')
-    E_df.to_parquet(output_dir / 'EXIOBASE_E.parquet')
-    X_df.to_parquet(output_dir / 'EXIOBASE_X.parquet')
-
-    # --- 8. Save Labels and Defaults ---
     print("Saving labels and default scenario to JSON.")
+
     labels_data = {
         'countries': list(mrio.get_regions()),
         'sectors': list(mrio.get_sectors()),
@@ -217,8 +257,12 @@ def ingest_and_save_exiobase(year=2021):
             'shock_sector': default_shock_sector
         }
     }
-    with open(output_dir / 'labels.json', 'w') as f:
-        json.dump(labels_data, f, indent=4)
+    save_mrio_provider_bundle(
+        output_dir,
+        prefix='EXIOBASE',
+        matrices={'A': A_df, 'L': L_df, 'G': G_df, 'Y': Y_df, 'E': E_df, 'X': X_df},
+        labels_data=labels_data,
+    )
 
     print("\n-----------------------------------------------------")
     print("Ingestion complete!")
