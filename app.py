@@ -2,6 +2,7 @@ import dash
 from dash import dcc, html
 import dash.exceptions
 from dash.dependencies import Input, Output, State
+import dash_mantine_components as dmc
 import plotly.graph_objects as go
 import numpy as np
 from functools import lru_cache
@@ -16,23 +17,52 @@ from threading import Timer, Thread
 
 from src.data_loader import load_labels_data, load_mrio_matrices, load_production_history, load_encore_materiality
 from src.callbacks import handle_simulation_results
+from src.plotting import create_builder_historical_plot
 from src.config import country_mapping, COUNTRY_CODES_3_LETTER, COLOR_PALETTE, get_valid_region_groups
 from src.es_shock import effective_magnitude, extract_sector_intensities
+from src.design_tokens import COLORS, SPACING, TYPE
 
 # --- 1. Load Data and Pre-compute --- #
 # Data will be loaded within the callback based on the selected year
 
 # --- 2. Initialize Dash App --- #
+# The CodePen skeleton stylesheet is gone: assets/design-system.css (WS0 tokens)
+# is auto-served from assets/, and dash-mantine-components ships its own CSS
+# bundled with the components (no external stylesheet needed as of dmc>=1.2).
 app = dash.Dash(__name__,
     suppress_callback_exceptions=True,
-    external_stylesheets=[
-        # Default Dash stylesheet
-        'https://codepen.io/chriddyp/pen/bWLwgP.css',
-        # Custom styles for dropdowns and other elements
-        '/assets/custom.css'
-    ]
 )
 server = app.server
+
+
+def build_mantine_theme():
+    """Builds a Mantine theme dict from the shared design tokens (src/design_tokens.py)
+    so the component library and the hand-written CSS/Plotly colors never drift.
+
+    Mantine expects each named color as a 10-shade array. Our brand tokens are
+    flat (colorblind-safe Okabe-Ito) hexes rather than shade ramps, so we repeat
+    the hex across the array — this keeps the exact brand color while still
+    giving Mantine a valid palette to key off of (e.g. `primaryColor`).
+    """
+    brand = COLORS['brand']
+
+    def shades(hex_color):
+        return [hex_color] * 10
+
+    return {
+        "primaryColor": "vesdioBlue",
+        "colors": {
+            "vesdioBlue": shades(brand['blue']),
+            "vesdioRed": shades(brand['red']),
+            "vesdioGreen": shades(brand['green']),
+            "vesdioAmber": shades(brand['amber']),
+        },
+        "fontFamily": TYPE['font_family_base'],
+        "defaultRadius": "sm",
+    }
+
+
+MANTINE_THEME = build_mantine_theme()
 
 # --- 3. Define App Layout --- #
 # Define dropdown styles
@@ -42,415 +72,547 @@ dropdown_style = {
     'minHeight': '38px'
 }
 
+# Style for the small scrollable "current items" lists (portfolio/scenario).
+scroll_list_style = {
+    'maxHeight': '150px',
+    'overflowY': 'auto',
+    'border': '1px solid var(--color-border)',
+    'borderRadius': 'var(--radius-md)',
+    'padding': SPACING[3],
+    'backgroundColor': 'var(--color-bg-subtle)',
+    'marginTop': SPACING[1],
+}
+
 years = list(range(1995, 2022))
 
-app.layout = html.Div(style={'fontFamily': 'Arial, sans-serif', 'height': '100vh', 'display': 'flex', 'flexDirection': 'column'}, children=[
-    # Top Menu Bar
-    html.Div(
-        style={
-            'backgroundColor': '#f0f0f0',
-            'borderBottom': '1px solid #ddd',
-            'padding': '10px 40px',
-            'display': 'flex',
-            'alignItems': 'center',
-            'justifyContent': 'space-between',
-            'flexShrink': 0 # Prevent the bar from shrinking
-        },
-        children=[
-            html.Div(style={'display': 'flex', 'alignItems': 'center'}, children=[
-                html.Img(src='/assets/ms-icon-310x310.png', style={'height': '50px', 'marginRight': '15px'}),
-                html.H1("VESDIO", style={'margin': 0, 'fontSize': '24px'}),
-            ]),
-            html.Button("Instructions", id="open-instructions-button", n_clicks=0, className='button-primary')
-        ]
-    ),
 
-    # Main Content Area
-    html.Div(style={'padding': '20px', 'overflowY': 'auto', 'flexGrow': 1}, children=[
-        # Left column for controls
-        # This dcc.Store holds the list of shocks for the scenario builder
+def step_card(step_number, title, children):
+    """A single step in the guided control-column flow: a numbered badge + title
+    over a card of controls. Purely a visual/skin element — no callback wiring."""
+    return dmc.Paper(
+        withBorder=True,
+        radius="md",
+        p=SPACING[4],
+        mb=SPACING[5],
+        className='control-group',
+        children=[
+            dmc.Group(
+                gap=SPACING[2],
+                mb=SPACING[3],
+                children=[
+                    dmc.Badge(str(step_number), circle=True, color="vesdioBlue", variant="filled"),
+                    dmc.Title(title, order=3, style={'margin': 0}),
+                ]
+            ),
+            html.Div(children=children),
+        ]
+    )
+
+
+# --- Top menu bar --- #
+top_bar = html.Header(
+    id='app-top-bar',
+    style={
+        'backgroundColor': 'var(--color-bg-subtle)',
+        'borderBottom': '1px solid var(--color-border)',
+        'padding': f"{SPACING[3]} {SPACING[8]}",
+        'display': 'flex',
+        'alignItems': 'center',
+        'justifyContent': 'space-between',
+        'flexShrink': 0,
+    },
+    children=[
+        html.Div(style={'display': 'flex', 'alignItems': 'center', 'gap': SPACING[4]}, children=[
+            html.Img(
+                src='/assets/ms-icon-310x310.png',
+                alt='VESDIO logo',
+                style={'height': '48px'}
+            ),
+            dmc.Title("VESDIO", order=1, style={'margin': 0, 'fontSize': TYPE['font_size']['xl']}),
+        ]),
+        dmc.Button(
+            "Instructions",
+            id="open-instructions-button",
+            n_clicks=0,
+            variant="light",
+            **{'aria-label': 'Open instructions and methodology'}
+        )
+    ]
+)
+
+# --- Step 1: Position / Portfolio --- #
+position_step = step_card(1, "Your Position / Portfolio", [
+    html.Fieldset(style={'border': 'none', 'padding': 0, 'margin': 0}, children=[
+        html.Legend("Choose single asset or portfolio mode", className='visually-hidden'),
+        dcc.RadioItems(
+            id='position-mode-toggle',
+            options=[
+                {'label': 'Single Asset', 'value': 'single'},
+                {'label': 'Portfolio', 'value': 'portfolio'},
+            ],
+            value='single',
+            labelStyle={'display': 'inline-block', 'marginRight': SPACING[2]},
+        ),
+    ]),
+    # Single Asset Mode Controls
+    html.Div(id='single-asset-controls', children=[
+        html.Label("Select Your Home Region:", htmlFor='home-region-dropdown', style={'marginTop': SPACING[2], 'display': 'block'}),
+        dcc.Dropdown(id='home-region-dropdown', style=dropdown_style),
+        html.Label("Select Your Home Sector:", htmlFor='home-sector-dropdown', style={'marginTop': SPACING[2], 'display': 'block'}),
+        dcc.Dropdown(id='home-sector-dropdown', style=dropdown_style),
+    ]),
+    # Portfolio Mode Controls
+    html.Div(id='portfolio-controls', style={'display': 'none'}, children=[
+        html.Div(children=[
+            html.Label("Region:", htmlFor='portfolio-region-select'),
+            dcc.Dropdown(id='portfolio-region-select')
+        ]),
+        html.Div(children=[
+            html.Label("Sector:", htmlFor='portfolio-sector-select'),
+            dcc.Dropdown(id='portfolio-sector-select')
+        ]),
+        html.Label("Portfolio Weight (%):", htmlFor='portfolio-weight-input'),
+        dcc.Input(id='portfolio-weight-input', type='number', min=0.1, max=100, step=0.1, value=10, style={'width': '100%'}),
+        dmc.Button("Add to Portfolio", id="add-portfolio-item-button", n_clicks=0, fullWidth=True, mt=SPACING[2]),
+        html.Div(id='portfolio-summary-display', style={'marginTop': SPACING[4]}),
+        html.Div(id='portfolio-display-list', style=scroll_list_style),
+        dmc.Grid(mt=SPACING[2], children=[
+            dmc.GridCol(span=6, children=[
+                dcc.Upload(
+                    id='upload-portfolio',
+                    children=dmc.Button('Import Portfolio', variant="default", fullWidth=True),
+                    multiple=False, accept='.yaml,.yml'
+                )
+            ]),
+            dmc.GridCol(span=6, children=[
+                dmc.Button("Export Portfolio", id="export-portfolio-button", n_clicks=0, variant="default", fullWidth=True)
+            ]),
+        ]),
+    ]),
+])
+
+# --- Step 2: Define Shock Event --- #
+shock_step = step_card(2, "Define Shock Event", [
+    html.Div(id='single-shock-controls', children=[
+        html.Label("Shocked Region:", htmlFor='shock-region-dropdown', style={'marginTop': SPACING[2], 'display': 'block'}),
+        dcc.Dropdown(id='shock-region-dropdown', style=dropdown_style),
+        html.Fieldset(style={'border': 'none', 'padding': 0, 'margin': 0}, children=[
+            html.Legend("Choose shock type", className='visually-hidden'),
+            dcc.RadioItems(
+                id='shock-type-toggle',
+                options=[
+                    {'label': 'Sector-Specific Shock', 'value': 'sector'},
+                    {'label': 'Ecosystem Service Shock', 'value': 'ecosystem'},
+                ],
+                value='ecosystem',
+                labelStyle={'display': 'inline-block', 'marginRight': SPACING[2]},
+            ),
+        ]),
+        html.Div(id='sector-shock-controls', children=[
+            html.Label("Shocked Sector:", htmlFor='shock-sector-dropdown', style={'marginTop': SPACING[2], 'display': 'block'}),
+            dcc.Dropdown(id='shock-sector-dropdown', style=dropdown_style),
+        ]),
+        html.Div(id='ecosystem-shock-controls', style={'display': 'none'}, children=[
+            html.Label("Ecosystem Service:", htmlFor='ecosystem-service-dropdown', style={'marginTop': SPACING[2], 'display': 'block'}),
+            dcc.Dropdown(id='ecosystem-service-dropdown', style=dropdown_style),
+        ]),
+    ]),
+    dmc.Divider(my=SPACING[3]),
+    dmc.Button("Create Custom Scenario...", id='open-builder-button', n_clicks=0, variant="default", fullWidth=True),
+    html.Div(id='builder-display-area', style={'display': 'none'}, children=[
+        html.Label("Custom Scenario Shocks:", style={'marginTop': SPACING[2], 'display': 'block'}),
+        html.Div(id='main-scenario-display-list', style=scroll_list_style),
+        dmc.Grid(mt=SPACING[2], children=[
+            dmc.GridCol(span=6, children=[
+                dmc.Button("Edit Scenario...", id='edit-builder-button', n_clicks=0, variant="default", fullWidth=True)
+            ]),
+            dmc.GridCol(span=6, children=[
+                dmc.Button("Clear Scenario", id='clear-scenario-button', n_clicks=0, color="vesdioRed", fullWidth=True)
+            ]),
+        ]),
+    ]),
+])
+
+# --- Step 3: Configure --- #
+configure_step = step_card(3, "Configure Simulation", [
+    html.Label("Shock Magnitude (%):", htmlFor='shock-magnitude-input', style={'marginTop': SPACING[2], 'display': 'block'}),
+    dcc.Slider(
+        id='shock-magnitude-input',
+        min=0,
+        max=100,
+        step=1,
+        value=10,
+        marks={i: f'{i}%' for i in range(0, 101, 10)},
+        tooltip={"placement": "bottom", "always_visible": True}
+    ),
+    html.Label("Select Year:", htmlFor='year-dropdown', style={'display': 'block'}),
+    dcc.Dropdown(
+        id='year-dropdown',
+        options=[{'label': str(y), 'value': y} for y in years],
+        value=2021,
+        style=dropdown_style
+    ),
+    html.Label("Calculation Method:", htmlFor='model-method-toggle', style={'marginTop': SPACING[2], 'display': 'block'}),
+    dcc.RadioItems(
+        id='model-method-toggle',
+        options=[
+            {'label': 'Leontief (Demand-Side)', 'value': 'leontief'},
+            {'label': 'Ghosh (Supply-Side)', 'value': 'ghosh'},
+            {'label': 'Constrained (Rigorous LP, slower)', 'value': 'constrained'},
+        ],
+        value='ghosh',
+        labelStyle={'display': 'inline-block', 'marginRight': SPACING[2]},
+    ),
+])
+
+# --- Run step (moved to the end of the guided flow) --- #
+run_step = dmc.Paper(
+    withBorder=True,
+    radius="md",
+    p=SPACING[4],
+    className='control-group',
+    children=[
+        dmc.Button(
+            '▶ Run Simulation',
+            id='run-button',
+            n_clicks=0,
+            size="lg",
+            fullWidth=True,
+            color="vesdioBlue",
+            **{'aria-label': 'Run the simulation with the configured scenario'}
+        ),
+        dmc.Text(
+            id='run-button-error-message',
+            **{'aria-live': 'polite'},
+            style={'color': 'var(--color-negative)', 'textAlign': 'center', 'marginTop': SPACING[1], 'minHeight': '20px'}
+        )
+    ]
+)
+
+# Decorative progress rail — purely visual guidance through the flow below;
+# it does not gate/hide step content, so no additional callback wiring (and no
+# risk of orphaning ids that the existing callbacks depend on) is introduced.
+guided_stepper = dmc.Stepper(
+    id='ui-guided-stepper',
+    active=3,
+    allowNextStepsSelect=False,
+    size="sm",
+    color="vesdioBlue",
+    mb=SPACING[5],
+    children=[
+        dmc.StepperStep(label="Position", description="Who are you?"),
+        dmc.StepperStep(label="Shock", description="What happens?"),
+        dmc.StepperStep(label="Configure", description="How severe?"),
+    ]
+)
+
+left_column = dmc.Stack(
+    gap=0,
+    children=[
+        guided_stepper,
+        position_step,
+        shock_step,
+        configure_step,
+        run_step,
+    ]
+)
+
+# --- Right column: results --- #
+scenario_summary_header = dmc.Alert(
+    id='scenario-summary-header',
+    title="Scenario summary",
+    color="vesdioBlue",
+    variant="light",
+    mb=SPACING[4],
+    **{'aria-live': 'polite'}
+)
+
+results_empty_state = html.Div(
+    id='results-empty-state',
+    role='status',
+    style={
+        'textAlign': 'center',
+        'padding': f"{SPACING[12]} {SPACING[4]}",
+        'color': 'var(--color-text-muted)',
+        'border': '1px dashed var(--color-border-strong)',
+        'borderRadius': 'var(--radius-lg)',
+    },
+    children=[
+        dmc.Title("No results yet", order=3, style={'margin': 0}),
+        dmc.Text("Configure your position and shock event on the left, then click ▶ Run Simulation to see results here.", mt=SPACING[2]),
+    ]
+)
+
+right_column = html.Div(children=[
+    scenario_summary_header,
+    results_empty_state,
+    dcc.Loading(
+        id="loading-results",
+        type="default",
+        # We'll achieve a custom translucent overlay using styles instead of fullscreen=True
+        parent_style={
+            'position': 'absolute',
+            'top': 0,
+            'left': 0,
+            'width': '100%',
+            'height': '100%',
+            'zIndex': 999,  # Ensure it's on top
+            'minHeight': '90vh'
+        },
+        children=html.Div(id='results-output', style={'display': 'none'}, children=[
+            html.H3(id='results-title', style={'textAlign': 'center'}),
+            dcc.Tabs(id="results-tabs", children=[
+                dcc.Tab(label='Summary', children=[
+                    dmc.Grid(mt=SPACING[5], children=[
+                        dmc.GridCol(span={"base": 12, "md": 6}, children=[dcc.Graph(id='home-impact-barchart')]),
+                        dmc.GridCol(span={"base": 12, "md": 6}, children=[dcc.Graph(id='impact-waterfall-chart')]),
+                    ]),
+                    # Display Options
+                    html.Div(className='control-group', style={'marginTop': SPACING[5]}, children=[
+                        dmc.Title("Display Options", order=3),
+                        html.Label("Aggregation Level:", style={'marginTop': SPACING[4], 'display': 'block'}),
+                        dcc.RadioItems(
+                            id='aggregation-toggle',
+                            options=[
+                                {'label': 'Show by Country-Sector', 'value': 'none'},
+                                {'label': 'Aggregate by Country', 'value': 'country'},
+                                {'label': 'Aggregate by Sector', 'value': 'sector'},
+                            ],
+                            value='country',
+                            labelStyle={'display': 'block'}
+                        ),
+                    ]),
+                ]),
+                dcc.Tab(label='Geographic Impact', children=[
+                    html.Div(style={'marginTop': SPACING[5]}, children=[
+                        dcc.Graph(id='country-impact-chart')
+                    ])
+                ]),
+                dcc.Tab(label='Supply Chain Flow', children=[
+                    html.Div(style={'marginTop': SPACING[5]}, children=[
+                        dcc.Graph(id='sankey-diagram')
+                    ])
+                ]),
+                dcc.Tab(label='Global Impacts', children=[
+                    html.Div([
+                        html.Label("Rank Sectors By:", style={'fontWeight': 'bold'}),
+                        dcc.RadioItems(
+                            id='top-impacts-sort-toggle',
+                            options=[
+                                {'label': 'Relative Impact (%)', 'value': 'percentage'},
+                                {'label': 'Absolute Impact (Monetary)', 'value': 'absolute'},
+                            ],
+                            value='percentage',
+                            labelStyle={'display': 'inline-block', 'marginRight': SPACING[4]},
+                        ),
+                    ], style={'padding': SPACING[4]}),
+                    html.Div(id='top-impacts-table'),
+                ]),
+                dcc.Tab(label='Historical Context', children=[
+                    dcc.Graph(id='production-history-chart')
+                ]),
+                dcc.Tab(label='Portfolio Breakdown', id='portfolio-breakdown-tab', children=[
+                    html.Div(id='portfolio-breakdown-content', style={'padding': SPACING[5]})
+                ]),
+            ])
+        ])
+    ),
+])
+
+main_content = dmc.Container(
+    fluid=True,
+    style={'padding': SPACING[5], 'overflowY': 'auto', 'flexGrow': 1},
+    children=[
+        # These dcc.Store components hold shared scenario/portfolio state used by
+        # multiple callbacks below; kept exactly as before (unchanged ids).
         dcc.Store(id='scenario-store', storage_type='memory', data=[]),
         dcc.Store(id='portfolio-store', storage_type='memory', data=[]),
         dcc.Store(id='encore-data-store', storage_type='memory'),
 
-        html.Div(className='four columns', style={'paddingRight': '20px'}, children=[
-            # Run Button at the top
-            html.Div(className='control-group', children=[
-                html.Button('▶ Run Simulation', id='run-button', n_clicks=0, style={'fontSize': '18px', 'width': '100%'}),
-                html.Div(id='run-button-error-message', style={'color': COLOR_PALETTE['red'], 'textAlign': 'center', 'marginTop': '5px', 'minHeight': '20px', 'marginBottom': '5px'})
-            ]),
-
-            # User Target Selection & Scenario Configuration
-            html.Div(className='control-group', children=[
-                html.H3("Your Position / Portfolio"),
-                dcc.RadioItems(
-                    id='position-mode-toggle',
-                    options=[
-                        {'label': 'Single Asset', 'value': 'single'},
-                        {'label': 'Portfolio', 'value': 'portfolio'},
-                    ],
-                    value='single',
-                    labelStyle={'display': 'inline-block', 'marginRight': '10px'}
-                ),
-                # Single Asset Mode Controls
-                html.Div(id='single-asset-controls', children=[
-                    html.Label("Select Your Home Region:", style={'marginTop': '10px'}),
-                    dcc.Dropdown(id='home-region-dropdown', style=dropdown_style),
-                    html.Label("Select Your Home Sector:", style={'marginTop': '10px'}),
-                    dcc.Dropdown(id='home-sector-dropdown', style=dropdown_style),
-                ]),
-                # Portfolio Mode Controls
-                html.Div(id='portfolio-controls', style={'display': 'none'}, children=[
-                    html.Div(children=[
-                        html.Label("Region:"),
-                        dcc.Dropdown(id='portfolio-region-select')
-                    ]),
-                    html.Div(children=[
-                            html.Label("Sector:"),
-                            dcc.Dropdown(id='portfolio-sector-select')
-                    ]),
-                    html.Label("Portfolio Weight (%):"),
-                    dcc.Input(id='portfolio-weight-input', type='number', min=0.1, max=100, step=0.1, value=10, style={'width': '100%'}),
-                    html.Button("Add to Portfolio", id="add-portfolio-item-button", n_clicks=0, style={'width': '100%', 'marginTop': '10px'}),
-                    html.Div(id='portfolio-summary-display', style={'marginTop': '15px'}),
-                    html.Div(id='portfolio-display-list', style={'maxHeight': '150px', 'overflowY': 'auto', 'border': '1px solid #ccc', 'padding': '10px', 'backgroundColor': '#f9f9f9', 'marginTop': '5px'}),
-                    html.Div(className='row', style={'marginTop': '10px'}, children=[
-                        html.Div(className='six columns', children=[
-                            dcc.Upload(
-                                id='upload-portfolio',
-                                children=html.Button('Import Portfolio'),
-                                multiple=False, accept='.yaml,.yml'
-                            )
-                        ]),
-                        html.Div(className='six columns', children=[
-                            html.Button("Export Portfolio", id="export-portfolio-button", n_clicks=0, style={'width': '100%'})
-                        ]),
-                    ]),
-                ]),
-            ]),
-            html.Div(className='control-group', style={'marginTop': '25px'}, children=[
-                html.H3("Define Shock Event"),                
-                html.Div(id='single-shock-controls', children=[
-                    html.Label("Shocked Region:", style={'marginTop': '10px'}),
-                    dcc.Dropdown(id='shock-region-dropdown', style=dropdown_style),
-                    dcc.RadioItems(
-                        id='shock-type-toggle',
-                        options=[
-                            {'label': 'Sector-Specific Shock', 'value': 'sector'},
-                            {'label': 'Ecosystem Service Shock', 'value': 'ecosystem'},
-                        ],
-                        value='ecosystem',
-                        labelStyle={'display': 'inline-block', 'marginRight': '10px'}
-                    ),
-                    html.Div(id='sector-shock-controls', children=[
-                        html.Label("Shocked Sector:", style={'marginTop': '10px'}),
-                        dcc.Dropdown(id='shock-sector-dropdown', style=dropdown_style),
-                    ]),
-                    html.Div(id='ecosystem-shock-controls', style={'display': 'none'}, children=[
-                        html.Label("Ecosystem Service:", style={'marginTop': '10px'}),
-                        dcc.Dropdown(id='ecosystem-service-dropdown', style=dropdown_style),
-                    ]),
-                ]),
-                html.Hr(),
-                html.Button("Create Custom Scenario...", id='open-builder-button', n_clicks=0, style={'width': '100%'}),
-                html.Div(id='builder-display-area', style={'display': 'none'}, children=[
-                    html.Label("Custom Scenario Shocks:", style={'marginTop': '10px'}),
-                    html.Div(id='main-scenario-display-list', style={'maxHeight': '150px', 'overflowY': 'auto', 'border': '1px solid #ccc', 'padding': '10px', 'backgroundColor': '#f9f9f9'}),
-                    html.Div(className='row', style={'marginTop': '10px'}, children=[
-                        html.Div(className='six columns', children=[
-                            html.Button("Edit Scenario...", id='edit-builder-button', n_clicks=0, style={'width': '100%'})
-                        ]),
-                        html.Div(className='six columns', children=[
-                            html.Button("Clear Scenario", id='clear-scenario-button', n_clicks=0, style={'width': '100%', 'backgroundColor': '#D55E00', 'color': 'white'})
-                        ])
-                    ])
-                ]),
-            ]),
-
-            html.Div(className='control-group', style={'marginTop': '25px'}, children=[
-                html.H3("Scenario Type & Magnitude"),
-                html.Label("Shock Magnitude (%):", style={'marginTop': '10px'}),
-                dcc.Slider(
-                    id='shock-magnitude-input',
-                    min=0,
-                    max=100,
-                    step=1,
-                    value=10,
-                    marks={i: f'{i}%' for i in range(0, 101, 10)},
-                    tooltip={"placement": "bottom", "always_visible": True}
-                ),
-                # NOTE (WS5 — swappable IO-database core): a "Data source" /
-                # database selector (e.g. dcc.Dropdown(id='provider-dropdown',
-                # options=[{'label': m.name, 'value': m.id} for m in
-                # src.providers.list_providers() if m.implemented], value=
-                # src.providers.DEFAULT_PROVIDER_ID)) would go here, right
-                # above the year selector. It is intentionally left
-                # unwired for now: EXIOBASE is the only implemented
-                # provider (see src/providers/__init__.py), and wiring a
-                # live selector would require threading a `provider_id`
-                # through get_cached_matrices/load_labels_data and every
-                # callback that currently assumes EXIOBASE's region/sector
-                # vocabulary (src/callbacks.py) — out of scope for this
-                # additive refactor.
-                html.Label("Select Year:"),
-                dcc.Dropdown(
-                    id='year-dropdown',
-                    options=[{'label': str(y), 'value': y} for y in years],
-                    value=2021,
-                    style=dropdown_style
-                ),
-                html.Label("Calculation Method:", style={'marginTop': '10px'}),
-                # NOTE: this toggle is a minimal WS3 addition of the 'constrained' option
-                # value so the new rigorous LP solver (src/scenario_modeler.py) is
-                # reachable end-to-end. A proper 3-way control (styling, help text,
-                # runtime-expectation messaging for the slower solver) belongs to the
-                # WS1 UI-modernization workstream, not this change.
-                dcc.RadioItems(
-                    id='model-method-toggle',
-                    options=[
-                        {'label': 'Leontief (Demand-Side)', 'value': 'leontief'},
-                        {'label': 'Ghosh (Supply-Side)', 'value': 'ghosh'},
-                        {'label': 'Constrained (Rigorous LP, slower)', 'value': 'constrained'},
-                    ],
-                    value='ghosh',
-                    labelStyle={'display': 'inline-block', 'marginRight': '10px'}
-                ),
-                
-            ])
-
-            
+        dmc.Grid(gutter="lg", children=[
+            dmc.GridCol(span={"base": 12, "md": 4}, children=[left_column]),
+            dmc.GridCol(span={"base": 12, "md": 8}, style={'position': 'relative'}, children=[right_column]),
         ]),
+    ]
+)
 
-        # Right column for results
-        html.Div(className='eight columns', style={'position': 'relative'}, children=[
-            dcc.Loading(
-                id="loading-results",
-                type="default",
-                # We'll achieve a custom translucent overlay using styles instead of fullscreen=True
-                parent_style={
-                    'position': 'absolute',
-                    'top': 0,
-                    'left': 0,
-                    'width': '100%',
-                    'height': '100%',
-                    'zIndex': 999, # Ensure it's on top
-                    'minHeight': '90vh'
-                },
-                children=html.Div(id='results-output', children=[
-                    html.H3(id='results-title', style={'textAlign': 'center'}),
-                    dcc.Tabs(id="results-tabs", children=[
-                        dcc.Tab(label='Summary', children=[
-                            html.Div(className='row', style={'marginTop': '20px'}, children=[
-                                html.Div(className='six columns', children=[dcc.Graph(id='home-impact-barchart')]),
-                                html.Div(className='six columns', children=[dcc.Graph(id='impact-waterfall-chart')]),
-                            ]),
-                            # Display Options
-                            html.Div(className='control-group', style={'marginTop': '20px'}, children=[
-                                html.H3("Display Options"),
-                                html.Label("Aggregation Level:", style={'marginTop': '15px'}),
-                                dcc.RadioItems(
-                                    id='aggregation-toggle',
-                                    options=[
-                                        {'label': 'Show by Country-Sector', 'value': 'none'},
-                                        {'label': 'Aggregate by Country', 'value': 'country'},
-                                        {'label': 'Aggregate by Sector', 'value': 'sector'},
-                                    ],
-                                    value='country',
-                                    labelStyle={'display': 'block'}
-                                ),
-                            ]),
-                        ]),
-                        dcc.Tab(label='Geographic Impact', children=[
-                            html.Div(style={'marginTop': '20px'}, children=[
-                                dcc.Graph(id='country-impact-chart')
-                            ])
-                        ]),
-                        dcc.Tab(label='Supply Chain Flow', children=[
-                            html.Div(style={'marginTop': '20px'}, children=[
-                                dcc.Graph(id='sankey-diagram')
-                            ])
-                        ]),
-                        dcc.Tab(label='Global Impacts', children=[
-                            html.Div([
-                                html.Label("Rank Sectors By:", style={'fontWeight': 'bold'}),
-                                dcc.RadioItems(
-                                    id='top-impacts-sort-toggle',
-                                    options=[
-                                        {'label': 'Relative Impact (%)', 'value': 'percentage'},
-                                        {'label': 'Absolute Impact (Monetary)', 'value': 'absolute'},
-                                    ],
-                                    value='percentage',
-                                    labelStyle={'display': 'inline-block', 'marginRight': '15px'}
-                                ),
-                            ], style={'padding': '15px'}),
-                            html.Div(id='top-impacts-table'),
-                        ]),
-                        dcc.Tab(label='Historical Context', children=[
-                            dcc.Graph(id='production-history-chart')
-                        ]),
-                        dcc.Tab(label='Portfolio Breakdown', id='portfolio-breakdown-tab', children=[
-                            html.Div(id='portfolio-breakdown-content', style={'padding': '20px'})
-                        ]),
-                    ])
+# --- Scenario Builder Modal (dmc.Modal: focus trap + Esc-to-close built in) --- #
+scenario_builder_modal = dmc.Modal(
+    id="scenario-builder-modal",
+    opened=False,
+    withCloseButton=False,
+    size="lg",
+    zIndex=1300,
+    children=[
+        html.Div([
+            dmc.Group(justify="space-between", children=[
+                dmc.Title("Scenario Builder", order=2),
+                dmc.ActionIcon(
+                    "×",
+                    id="modal-close-button",
+                    n_clicks=0,
+                    variant="subtle",
+                    size="lg",
+                    **{'aria-label': 'Close scenario builder'}
+                ),
+            ]),
+        ]),
+        html.Div([
+            # --- Part 1: Add/Configure a single shock ---
+            dmc.Title("1. Configure a Shock", order=4, mt=SPACING[4]),
+            dmc.Grid(children=[
+                dmc.GridCol(span={"base": 12, "md": 3}, children=[
+                    html.Label("Region:", htmlFor='builder-region-select'),
+                    dcc.Dropdown(id='builder-region-select')
+                ]),
+                dmc.GridCol(span={"base": 12, "md": 4}, children=[
+                    html.Label("Sector:", htmlFor='builder-sector-select'),
+                    dcc.Dropdown(id='builder-sector-select')
+                ]),
+                dmc.GridCol(span={"base": 12, "md": 3}, children=[
+                    html.Label("Magnitude (%):"),
+                    dcc.Slider(
+                        id='builder-magnitude-input',
+                        min=0, max=100, step=1, value=10,
+                        marks={i: f'{i}%' for i in range(0, 101, 20)},
+                        tooltip={"placement": "bottom", "always_visible": True}
+                    )
+                ]),
+                dmc.GridCol(span={"base": 12, "md": 2}, children=[
+                    dmc.Button("Add Shock", id="builder-add-shock-button", n_clicks=0, fullWidth=True, mt=SPACING[6])
+                ]),
+            ]),
+            dcc.Loading(type="circle", children=dcc.Graph(id='builder-single-chart', style={'height': '300px'})),
+            dmc.Divider(my=SPACING[3]),
+            # --- Part 2: Review the cumulative scenario ---
+            dmc.Title("2. Review Cumulative Scenario", order=4),
+            dmc.Grid(children=[
+                dmc.GridCol(span={"base": 12, "md": 6}, children=[
+                    dmc.Title("Current Shocks List", order=5),
+                    html.Div(id='scenario-display-list', style={
+                        'maxHeight': '250px', 'overflowY': 'auto',
+                        'border': '1px solid var(--color-border)', 'borderRadius': 'var(--radius-md)',
+                        'padding': SPACING[3]
+                    })
+                ]),
+                dmc.GridCol(span={"base": 12, "md": 6}, children=[
+                    dcc.Loading(
+                        type="circle",
+                        children=dcc.Graph(id='builder-combined-chart', style={'height': '300px'})
+                    )
                 ])
+            ])
+        ]),
+        # Footer
+        dmc.Grid(mt=SPACING[5], children=[
+            dmc.GridCol(span={"base": 12, "md": 6}, children=[
+                dcc.Upload(
+                    id='upload-yaml',
+                    children=dmc.Button('Import from YAML', variant="default"),
+                    multiple=False,
+                    accept='.yaml,.yml'
+                )
+            ]),
+            dmc.GridCol(span={"base": 12, "md": 6}, style={'textAlign': 'right'}, children=[
+                dmc.Button("Export to YAML", id="export-yaml-button", n_clicks=0, variant="default"),
+                dcc.Download(id="download-yaml"),
+                dmc.Button("Save and Close", id="modal-save-button", n_clicks=0, ml=SPACING[2]),
+            ])
+        ])
+    ]
+)
+
+# --- Instructions Modal --- #
+instructions_modal = dmc.Modal(
+    id="instructions-modal",
+    opened=False,
+    withCloseButton=False,
+    size="lg",
+    zIndex=1400,
+    children=[
+        dmc.Group(justify="space-between", children=[
+            dmc.Title("How to Use VESDIO", order=2),
+            dmc.ActionIcon(
+                "×",
+                id="instructions-modal-close-button",
+                n_clicks=0,
+                variant="subtle",
+                size="lg",
+                **{'aria-label': 'Close instructions'}
             ),
         ]),
-    ]),
+        dcc.Markdown('''
+            Welcome to the Valuing Ecosystem Service Dependencies with Input-Output (VESDIO) tool. This application helps you simulate the economic impacts of ecosystem services and supply chain disruptions.
 
-    # Scenario Builder Modal
-    html.Div(
-        id="scenario-builder-modal",
-        style={ # This is the main container for the modal
-            'display': 'none', # Toggled by callback
-            'position': 'fixed',
-            'zIndex': 1001,
-            'left': 0,
-            'top': 0,
-            'width': '100%',
-            'height': '100%',
-            'overflow': 'auto',
-            'backgroundColor': 'rgba(0,0,0,0.4)' # The background overlay
+            #### **Step 1: Set Your Perspective**
+            In the "Your Position / Portfolio" panel, choose how you want to analyze impacts:
+            - **Single Asset Mode**: This is the default. Select a single "Home Region" and "Home Sector" that represents your organization or area of interest. The results will be framed from this specific perspective.
+            - **Portfolio Mode**: Switch to this mode to model a collection of assets.
+                - Select a region, sector, and a weight (%) for each asset.
+                - Click "Add to Portfolio". You can add multiple assets.
+                - The total weight of all assets in your portfolio **must sum to 100%** before you can run the simulation.
+
+            #### **Step 2: Define the Disruption**
+            You can model a disruption in two ways:
+            - **A) Single Shock**: Use the "Define Shock Event" panel to model a simple disruption.
+                - **Sector-Specific**: Choose a region and a specific sector to disrupt (e.g., a 10% reduction in 'Cultivation of wheat' in 'Ukraine').
+                - **Ecosystem Service Shock**: Choose a region and an ecosystem service (e.g., 'Water Supply' in 'Brazil'). The tool will automatically apply the shock to all sectors in that region that are highly dependent on that service.
+            - **B) Custom Scenario**: For more complex events, click **"Create Custom Scenario..."**. This opens the Scenario Builder where you can add multiple shocks across different regions and sectors, each with its own magnitude. You can also import/export these scenarios as YAML files.
+
+            #### **Step 3: Configure the Simulation**
+            - **Year**: Select the dataset year for the underlying economic model.
+            - **Calculation Method**: Choose between 'Ghosh (Supply-Side)' for supply shocks (default) or 'Leontief (Demand-Side)' for demand shocks.
+            - **Shock Magnitude**: Use the slider to set the severity of the disruption (e.g., a 10% shock means the output of the shocked sector(s) is reduced by 10%).
+
+            #### **Step 4: Run and Analyze**
+            - Click the **"▶ Run Simulation"** button.
+            - The results will appear on the right. Use the tabs to explore different views. In Portfolio Mode, the results are aggregated across all your assets.
+                - **Summary**: Key impacts on your position/portfolio and a waterfall chart showing contributing factors.
+                - **Geographic Impact**: A world map visualizing the global distribution of impacts.
+                - **Supply Chain Flow**: A Sankey diagram illustrating the flow of the disruption through the supply chain.
+                - **Global Impacts**: A table of the most affected sectors worldwide based on this supply chain disruption.
+                - **Historical Context**: A chart showing the size of the impact relative to historical production.
+
+            #### **Technical Note**
+
+            The input-output models are based on EXIOBASE v3.9.6 (June 2025). It covers all 44 countries and 5 rest-of-world regions in EXIOBASE.
+
+            EXIOBASE citation: Stadler, K., Wood, R., Bulavskaya, T., Södersten, C.-J., Simas, M., Schmidt, S., Usubiaga, A., Acosta-Fernández, J., Kuenen, J., Bruckner, M., Giljum, S., Lutter, S., Merciai, S., Schmidt, J. H., Theurl, M. C., Plutzar, C., Kastner, T., Eisenmenger, N., Erb, K.-H., … Tukker, A. (2025). EXIOBASE 3 (3.9.6) [Data set]. Zenodo. https://doi.org/10.5281/zenodo.15689391
+
+            The link between ecosystem services and sector production is calculated through materiality ratings in the ENCORE database. Sectors with "High" or "Very High" materiality to an ecosystem services are assumed to have production decreased in proportion to the specified magnitude of production disruption. Sectors without a "High" or "Very High" materiality rating to an ecosystem service is assumed to be unaffected.
+
+            ENCORE citation: Global Canopy and UNEP (2025). Exploring Natural Capital Opportunities, Risk and Exposure (June 2025 update). https://encorenature.org/en
+
+            #### Disclaimer
+
+            This tool is in its experimental phase and is not yet fully tested and validated. It does not come with warranty. Use at your own risk.
+        ''')
+    ]
+)
+
+app.layout = dmc.MantineProvider(
+    id='mantine-provider',
+    theme=MANTINE_THEME,
+    defaultColorScheme="auto",
+    children=html.Div(
+        id='app-root',
+        style={
+            'fontFamily': 'var(--font-family-base)',
+            'minHeight': '100vh',
+            'display': 'flex',
+            'flexDirection': 'column',
+            'backgroundColor': 'var(--color-bg)',
+            'color': 'var(--color-text)',
         },
         children=[
-            # This is the modal content box
-            html.Div(style={'backgroundColor': '#fefefe', 'margin': '10% auto', 'padding': '20px', 'border': '1px solid #888', 'width': '80%', 'maxWidth': '800px'}, children=[
-                # Header
-                html.Div([
-                    html.Span("×", id="modal-close-button", style={'color': '#aaa', 'float': 'right', 'fontSize': '28px', 'fontWeight': 'bold', 'cursor': 'pointer'}),
-                    html.H2("Scenario Builder"),
-                ]),
-                # Body
-                html.Div([
-                    # --- Part 1: Add/Configure a single shock ---
-                    html.H4("1. Configure a Shock"),
-                    html.Div(className='row', children=[
-                        html.Div(className='three columns', children=[
-                            html.Label("Region:"),
-                            dcc.Dropdown(id='builder-region-select')
-                        ]),
-                        html.Div(className='four columns', children=[
-                            html.Label("Sector:"),
-                            dcc.Dropdown(id='builder-sector-select')
-                        ]),
-                        html.Div(className='three columns', children=[
-                            html.Label("Magnitude (%):"),
-                            dcc.Slider(
-                                id='builder-magnitude-input',
-                                min=0, max=100, step=1, value=10,
-                                marks={i: f'{i}%' for i in range(0, 101, 20)},
-                                tooltip={"placement": "bottom", "always_visible": True}
-                            )
-                        ]),
-                        html.Div(className='two columns', children=[
-                            html.Button("Add Shock", id="builder-add-shock-button", n_clicks=0, style={'width': '100%', 'marginTop': '25px', 'padding': '5px', 'paddingTop': '0px'})
-                        ]),
-                    ]),
-                    dcc.Loading(type="circle", children=dcc.Graph(id='builder-single-chart', style={'height': '300px'})),
-                    html.Hr(),
-                    # --- Part 2: Review the cumulative scenario ---
-                    html.H4("2. Review Cumulative Scenario"),
-                    html.Div(className='row', children=[
-                        html.Div(className='six columns', children=[
-                            html.H5("Current Shocks List"),
-                            html.Div(id='scenario-display-list', style={'maxHeight': '250px', 'overflowY': 'auto', 'border': '1px solid #ccc', 'padding': '10px'})
-                        ]),
-                        html.Div(className='six columns', children=[
-                            dcc.Loading(
-                                type="circle", 
-                                children=dcc.Graph(id='builder-combined-chart', style={'height': '300px'})
-                            )
-                        ])
-                    ])
-                ]),
-                # Footer
-                html.Div(className='row', style={'marginTop': '20px'}, children=[
-                    html.Div(className='six columns', children=[
-                        dcc.Upload(
-                            id='upload-yaml',
-                            children=html.Button('Import from YAML'),
-                            multiple=False,
-                            accept='.yaml,.yml'
-                        )
-                    ]),
-                    html.Div(className='six columns', style={'textAlign': 'right'}, children=[
-                        html.Button("Export to YAML", id="export-yaml-button", n_clicks=0),
-                        dcc.Download(id="download-yaml"),
-                        html.Button("Save and Close", id="modal-save-button", n_clicks=0, style={'marginLeft': '10px'})
-                    ])
-                ])
-            ])
+            top_bar,
+            main_content,
+            scenario_builder_modal,
+            instructions_modal,
+            dcc.Download(id="download-portfolio-yaml"),
         ]
-    ),
-
-    # Instructions Modal
-    html.Div(
-        id="instructions-modal",
-        style={ # Main container for the modal
-            'display': 'none', # Toggled by callback
-            'position': 'fixed', 'zIndex': 1002, 'left': 0, 'top': 0,
-            'width': '100%', 'height': '100%', 'overflow': 'auto',
-            'backgroundColor': 'rgba(0,0,0,0.4)'
-        },
-        children=[
-            # Modal content box
-            html.Div(style={'backgroundColor': '#fefefe', 'margin': '10% auto', 'padding': '20px', 'border': '1px solid #888', 'width': '80%', 'maxWidth': '700px'}, children=[
-                # Header
-                html.Div([
-                    html.Span("×", id="instructions-modal-close-button", style={'color': '#aaa', 'float': 'right', 'fontSize': '28px', 'fontWeight': 'bold', 'cursor': 'pointer'}),
-                    html.H2("How to Use VESDIO"),
-                ]),
-                # Body with instructions
-                dcc.Markdown('''
-                    Welcome to the Valuing Ecosystem Service Dependencies with Input-Output (VESDIO) tool. This application helps you simulate the economic impacts of ecosystem services and supply chain disruptions.
-
-                    #### **Step 1: Set Your Perspective**
-                    In the "Your Position / Portfolio" panel, choose how you want to analyze impacts:
-                    - **Single Asset Mode**: This is the default. Select a single "Home Region" and "Home Sector" that represents your organization or area of interest. The results will be framed from this specific perspective.
-                    - **Portfolio Mode**: Switch to this mode to model a collection of assets.
-                        - Select a region, sector, and a weight (%) for each asset.
-                        - Click "Add to Portfolio". You can add multiple assets.
-                        - The total weight of all assets in your portfolio **must sum to 100%** before you can run the simulation.
-                        
-                    #### **Step 2: Define the Disruption**
-                    You can model a disruption in two ways:
-                    - **A) Single Shock**: Use the "Define Shock Event" panel to model a simple disruption.
-                        - **Sector-Specific**: Choose a region and a specific sector to disrupt (e.g., a 10% reduction in 'Cultivation of wheat' in 'Ukraine').
-                        - **Ecosystem Service Shock**: Choose a region and an ecosystem service (e.g., 'Water Supply' in 'Brazil'). The tool will automatically apply the shock to all sectors in that region that are highly dependent on that service.
-                    - **B) Custom Scenario**: For more complex events, click **"Create Custom Scenario..."**. This opens the Scenario Builder where you can add multiple shocks across different regions and sectors, each with its own magnitude. You can also import/export these scenarios as YAML files.
-
-                    #### **Step 3: Configure the Simulation**
-                    - **Year**: Select the dataset year for the underlying economic model.
-                    - **Calculation Method**: Choose between 'Ghosh (Supply-Side)' for supply shocks (default) or 'Leontief (Demand-Side)' for demand shocks.
-                    - **Shock Magnitude**: Use the slider to set the severity of the disruption (e.g., a 10% shock means the output of the shocked sector(s) is reduced by 10%).
-
-                    #### **Step 4: Run and Analyze**
-                    - Click the **"▶ Run Simulation"** button.
-                    - The results will appear on the right. Use the tabs to explore different views. In Portfolio Mode, the results are aggregated across all your assets.
-                        - **Summary**: Key impacts on your position/portfolio and a waterfall chart showing contributing factors.
-                        - **Geographic Impact**: A world map visualizing the global distribution of impacts.
-                        - **Supply Chain Flow**: A Sankey diagram illustrating the flow of the disruption through the supply chain.
-                        - **Global Impacts**: A table of the most affected sectors worldwide based on this supply chain disruption.
-                        - **Historical Context**: A chart showing the size of the impact relative to historical production.
-                             
-                    #### **Technical Note**
-                    
-                    The input-output models are based on EXIOBASE v3.9.6 (June 2025). It covers all 44 countries and 5 rest-of-world regions in EXIOBASE. 
-                    
-                    EXIOBASE citation: Stadler, K., Wood, R., Bulavskaya, T., Södersten, C.-J., Simas, M., Schmidt, S., Usubiaga, A., Acosta-Fernández, J., Kuenen, J., Bruckner, M., Giljum, S., Lutter, S., Merciai, S., Schmidt, J. H., Theurl, M. C., Plutzar, C., Kastner, T., Eisenmenger, N., Erb, K.-H., … Tukker, A. (2025). EXIOBASE 3 (3.9.6) [Data set]. Zenodo. https://doi.org/10.5281/zenodo.15689391
-                
-                    The link between ecosystem services and sector production is calculated through materiality ratings in the ENCORE database. Sectors with "High" or "Very High" materiality to an ecosystem services are assumed to have production decreased in proportion to the specified magnitude of production disruption. Sectors without a "High" or "Very High" materiality rating to an ecosystem service is assumed to be unaffected.
-                             
-                    ENCORE citation: Global Canopy and UNEP (2025). Exploring Natural Capital Opportunities, Risk and Exposure (June 2025 update). https://encorenature.org/en
-                             
-                    #### Disclaimer
-                    
-                    This tool is in its experimental phase and is not yet fully tested and validated. It does not come with warranty. Use at your own risk.
-                ''')
-            ])
-        ]
-    ),
-    dcc.Download(id="download-portfolio-yaml"),
-])
+    )
+)
 
 # --- 4. Define Callback Logic --- #
 
@@ -477,7 +639,7 @@ def update_dropdowns(year):
 
     # Create options for individual countries
     country_options = [{'label': country_mapping.get(c, c), 'value': c} for c in COUNTRIES]
-    
+
     # Create options for aggregated regions
     valid_region_groups = get_valid_region_groups(COUNTRIES)
     group_options = [{'label': name, 'value': name} for name in sorted(valid_region_groups.keys())]
@@ -498,7 +660,7 @@ def update_dropdowns(year):
     ecosystem_services = sorted([item['service'] for item in encore_materiality])
     ecosystem_service_options = [{'label': s, 'value': s} for s in ecosystem_services]
     default_ecosystem_service = ecosystem_services[0] if ecosystem_services else None
-    ecosystem_service_options = [{'label': s, 'value': s} for s in ecosystem_services]    
+    ecosystem_service_options = [{'label': s, 'value': s} for s in ecosystem_services]
     # Set the default ecosystem service to 'Pollination' if it exists, otherwise fallback.
     default_ecosystem_service = 'Pollination' if 'Pollination' in ecosystem_services else (ecosystem_services[0] if ecosystem_services else None)
 
@@ -518,9 +680,9 @@ def update_dropdowns(year):
         default_shock_region = 'All'
         default_shock_sector = SECTORS[1] if len(SECTORS) > 1 else SECTORS[0]
 
-    return (country_options, sector_options, country_options, sector_options, shock_country_options, country_options, 
+    return (country_options, sector_options, country_options, sector_options, shock_country_options, country_options,
             sector_options, sector_options, ecosystem_service_options, encore_materiality,
-            default_home_region, default_home_sector, default_shock_region, 
+            default_home_region, default_home_sector, default_shock_region,
             default_shock_sector, default_ecosystem_service)
 
 @app.callback(
@@ -557,43 +719,48 @@ def toggle_shock_mode(scenario_data):
     # Default to single shock mode
     return {'display': 'block'}, {'display': 'none'}
 
+# NOTE: the two modal-toggle callbacks below now target dmc.Modal's `opened`
+# (boolean) prop instead of the old hand-rolled div's `style` dict — this is
+# the one intentional signature change in this workstream, required to adopt
+# the library Modal (built-in focus trap + Esc-to-close, per WS1 scope item 4).
+# All modal-related component ids (scenario-builder-modal, modal-close-button,
+# instructions-modal, instructions-modal-close-button, etc.) are unchanged.
 @app.callback(
-    Output('scenario-builder-modal', 'style'),
+    Output('scenario-builder-modal', 'opened'),
     [Input('open-builder-button', 'n_clicks'),
      Input('edit-builder-button', 'n_clicks'),
      Input('modal-save-button', 'n_clicks'),
      Input('modal-close-button', 'n_clicks')],
-    [State('scenario-builder-modal', 'style')]
+    prevent_initial_call=True,
 )
-def toggle_modal(open_clicks, edit_clicks, save_clicks, close_clicks, current_style):
+def toggle_modal(open_clicks, edit_clicks, save_clicks, close_clicks):
     ctx = dash.callback_context
     if not ctx.triggered:
-        return current_style
-    
+        return dash.no_update
+
     trigger_id = ctx.triggered[0]['prop_id'].split('.')[0]
 
     if trigger_id in ['open-builder-button', 'edit-builder-button']:
-        return {**current_style, 'display': 'block'}
+        return True
     if trigger_id in ['modal-save-button', 'modal-close-button']:
-        return {**current_style, 'display': 'none'}
-    return current_style
+        return False
+    return dash.no_update
 
 @app.callback(
-    Output('instructions-modal', 'style'),
+    Output('instructions-modal', 'opened'),
     [Input('open-instructions-button', 'n_clicks'),
      Input('instructions-modal-close-button', 'n_clicks')],
-    [State('instructions-modal', 'style')],
     prevent_initial_call=True
 )
-def toggle_instructions_modal(open_clicks, close_clicks, current_style):
+def toggle_instructions_modal(open_clicks, close_clicks):
     ctx = dash.callback_context
     trigger_id = ctx.triggered[0]['prop_id'].split('.')[0]
 
     if trigger_id == 'open-instructions-button':
-        return {**current_style, 'display': 'block'}
+        return True
     if trigger_id == 'instructions-modal-close-button':
-        return {**current_style, 'display': 'none'}
-    return current_style
+        return False
+    return dash.no_update
 
 @app.callback(
     Output('add-portfolio-item-button', 'disabled'),
@@ -611,14 +778,14 @@ def disable_add_to_portfolio_button(new_weight, portfolio_data, region, sector):
         return True # Disable if weight is invalid
 
     current_total_weight = sum(item.get('weight', 0) for item in portfolio_data)
-    
+
     # Check if the item being added/edited already exists in the portfolio
     existing_item_weight = 0
     for item in portfolio_data:
         if item['region'] == region and item['sector'] == sector:
             existing_item_weight = item['weight']
             break
-            
+
     # Calculate the potential new total weight
     # (Current total - old weight of item + new weight of item)
     potential_total = (current_total_weight - existing_item_weight) + new_weight
@@ -677,11 +844,11 @@ def update_portfolio_store(add_clicks, delete_clicks, upload_contents, region, s
         region_name = country_mapping.get(item['region'], item['region'])
         display_items.append(html.Div([
             html.Span(f"• {item['weight']}%: {region_name} - {item['sector']}", style={'flexGrow': 1}),
-            html.Button("×", id={'type': 'delete-portfolio-item-button', 'index': i}, n_clicks=0, style={'border': 'none', 'background': 'transparent', 'color': 'red', 'fontWeight': 'bold', 'cursor': 'pointer'})
+            html.Button("×", id={'type': 'delete-portfolio-item-button', 'index': i}, n_clicks=0, style={'border': 'none', 'background': 'transparent', 'color': 'var(--color-negative)', 'fontWeight': 'bold', 'cursor': 'pointer'})
         ], style={'display': 'flex', 'alignItems': 'center', 'justifyContent': 'space-between'}))
 
     summary_text = f"Total Weight: {total_weight:.1f}%"
-    summary_style = {'fontWeight': 'bold', 'color': '#D55E00' if not np.isclose(total_weight, 100) else 'black'}
+    summary_style = {'fontWeight': 'bold', 'color': 'var(--color-negative)' if not np.isclose(total_weight, 100) else 'var(--color-text)'}
     summary_display = html.P(summary_text, style=summary_style)
 
     return current_portfolio, display_items, summary_display
@@ -733,14 +900,14 @@ def update_scenario_store(add_clicks, clear_clicks, delete_clicks, upload_conten
                 current_shocks = uploaded_shocks
         except Exception as e:
             print(f"Error parsing uploaded YAML file: {e}")
-    
+
     # Generate the display list with delete buttons
     display_items = []
     for i, s in enumerate(current_shocks):
         region_name = country_mapping.get(s['region'], s['region'])
         display_items.append(html.Div([
             html.Span(f"• {region_name} - {s['sector']}: {s['magnitude']}%", style={'flexGrow': 1}),
-            html.Button("×", id={'type': 'delete-shock-button', 'index': i}, n_clicks=0, style={'border': 'none', 'background': 'transparent', 'color': 'red', 'fontWeight': 'bold', 'cursor': 'pointer'})
+            html.Button("×", id={'type': 'delete-shock-button', 'index': i}, n_clicks=0, style={'border': 'none', 'background': 'transparent', 'color': 'var(--color-negative)', 'fontWeight': 'bold', 'cursor': 'pointer'})
         ], style={'display': 'flex', 'alignItems': 'center', 'justifyContent': 'space-between'}))
 
     return current_shocks, display_items, display_items
@@ -761,7 +928,7 @@ def update_run_button_state_and_message(position_mode, portfolio_data):
         if not np.isclose(total_weight, 100):
             error_text = f"Portfolio weight must be 100% (is {total_weight:.1f}%)"
             return True, error_text  # Disable button and show error message
-    
+
     # In all other cases, enable the button and clear the error message
     return False, ""
 
@@ -778,11 +945,11 @@ def update_builder_single_chart(region, sector, magnitude, year):
     base_style = {'height': '300px'}
     if not all([region, sector, magnitude is not None, year]):
         return go.Figure(), {**base_style, 'display': 'none'}
-    
+
     shock = [{'region': region, 'sector': sector, 'magnitude': magnitude}]
     history = load_production_history()
     _, X_df, _, _, _ = get_cached_matrices(year)
-    
+
     return create_builder_historical_plot(shock, history, X_df, country_mapping, COLOR_PALETTE), base_style
 
 @app.callback(
@@ -796,10 +963,10 @@ def update_builder_combined_chart(scenario_data, year):
     base_style = {'height': '300px'}
     if not scenario_data or len(scenario_data) < 2:
         return go.Figure(), {**base_style, 'display': 'none'}
-    
+
     history = load_production_history()
     _, X_df, _, _, _ = get_cached_matrices(year)
-    
+
     return create_builder_historical_plot(scenario_data, history, X_df, country_mapping, COLOR_PALETTE), base_style
 
 @app.callback(
@@ -812,9 +979,9 @@ def export_portfolio(n_clicks, portfolio_data):
     """Exports the current portfolio to a YAML file."""
     if not portfolio_data:
         return dash.no_update
-    
+
     yaml_string = yaml.dump(portfolio_data, default_flow_style=False, sort_keys=False)
-    
+
     return dict(content=yaml_string, filename="vesdio_portfolio.yaml")
 
 @app.callback(
@@ -827,9 +994,9 @@ def export_scenario(n_clicks, scenario_data):
     """Exports the current scenario to a YAML file."""
     if not scenario_data:
         return dash.no_update
-    
+
     yaml_string = yaml.dump(scenario_data, default_flow_style=False, sort_keys=False)
-    
+
     return dict(content=yaml_string, filename="custom_shock_scenario.yaml")
 
 @lru_cache(maxsize=None)
@@ -865,7 +1032,7 @@ def get_cached_matrices(year):
      State('encore-data-store', 'data'),
      State('top-impacts-sort-toggle', 'value')]
 )
-def run_and_update_all_results(n_clicks, year, position_mode, portfolio_data, home_region, home_sector, shock_region, shock_sector, builder_shocks, magnitude, model_method, aggregation_level, shock_type, ecosystem_service, encore_data, top_impacts_sort_by):    
+def run_and_update_all_results(n_clicks, year, position_mode, portfolio_data, home_region, home_sector, shock_region, shock_sector, builder_shocks, magnitude, model_method, aggregation_level, shock_type, ecosystem_service, encore_data, top_impacts_sort_by):
     if n_clicks == 0:
         # Before the first run, hide the results panel and return empty figures/content
         empty_figs_and_content = [go.Figure()] * 3 + [""] + [go.Figure()] * 3 + [""]
@@ -922,10 +1089,72 @@ def run_and_update_all_results(n_clicks, year, position_mode, portfolio_data, ho
     # It fetches cached data and passes all inputs to the handler function.
     cached_data = get_cached_matrices(year)
     return handle_simulation_results(
-        n_clicks, year, position_mode, portfolio_data, home_region, home_sector, 
+        n_clicks, year, position_mode, portfolio_data, home_region, home_sector,
         shock_mode, shock_region, shock_sector, builder_shocks, magnitude, model_method, aggregation_level, cached_data,
         country_mapping, COUNTRY_CODES_3_LETTER, COLOR_PALETTE
     )
+
+# --- New, purely-additive UI callbacks (WS1): persistent scenario-summary
+# header and an explicit empty state before the first run. Neither touches
+# any id/prop used by the callbacks above. --- #
+
+@app.callback(
+    Output('results-empty-state', 'style'),
+    Input('run-button', 'n_clicks'),
+)
+def toggle_results_empty_state(n_clicks):
+    """Shows an explicit empty state until the user has run the simulation once."""
+    if not n_clicks:
+        return {
+            'textAlign': 'center',
+            'padding': f"{SPACING[12]} {SPACING[4]}",
+            'color': 'var(--color-text-muted)',
+            'border': '1px dashed var(--color-border-strong)',
+            'borderRadius': 'var(--radius-lg)',
+        }
+    return {'display': 'none'}
+
+@app.callback(
+    Output('scenario-summary-header', 'children'),
+    [Input('position-mode-toggle', 'value'),
+     Input('home-region-dropdown', 'value'),
+     Input('home-sector-dropdown', 'value'),
+     Input('shock-type-toggle', 'value'),
+     Input('shock-region-dropdown', 'value'),
+     Input('shock-sector-dropdown', 'value'),
+     Input('ecosystem-service-dropdown', 'value'),
+     Input('shock-magnitude-input', 'value'),
+     Input('model-method-toggle', 'value'),
+     Input('year-dropdown', 'value'),
+     Input('scenario-store', 'data'),
+     Input('portfolio-store', 'data')]
+)
+def update_scenario_summary_header(position_mode, home_region, home_sector, shock_type, shock_region, shock_sector,
+                                    ecosystem_service, magnitude, model_method, year, scenario_data, portfolio_data):
+    """Keeps a short, always-visible summary of the currently configured scenario
+    in view, independent of whether results have been computed yet."""
+    if position_mode == 'portfolio':
+        position_text = f"Portfolio ({len(portfolio_data or [])} asset(s))"
+    else:
+        home_region_name = country_mapping.get(home_region, home_region) if home_region else "—"
+        position_text = f"{home_sector or '—'} in {home_region_name}"
+
+    if scenario_data:
+        shock_text = f"Custom scenario ({len(scenario_data)} shock(s))"
+    elif shock_type == 'ecosystem':
+        shock_region_name = country_mapping.get(shock_region, shock_region) if shock_region else "—"
+        shock_text = f"Ecosystem service shock: {ecosystem_service or '—'} in {shock_region_name}"
+    else:
+        shock_region_name = country_mapping.get(shock_region, shock_region) if shock_region else "—"
+        shock_text = f"Sector shock: {shock_sector or '—'} in {shock_region_name}"
+
+    method_label = "Ghosh (Supply-Side)" if model_method == 'ghosh' else "Leontief (Demand-Side)"
+
+    return html.Div([
+        dmc.Text([html.B("Position: "), position_text]),
+        dmc.Text([html.B("Shock: "), shock_text]),
+        dmc.Text([html.B("Magnitude: "), f"{magnitude}%  ·  ", html.B("Method: "), f"{method_label}  ·  ", html.B("Year: "), f"{year}"]),
+    ])
 
 if __name__ == '__main__':
     # Determine if running as a bundled executable
