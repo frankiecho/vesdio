@@ -12,7 +12,7 @@ import io
 import webbrowser
 import sys
 import os
-from threading import Timer
+from threading import Timer, Thread
 
 from src.data_loader import load_labels_data, load_mrio_matrices, load_production_history, load_encore_materiality
 from src.callbacks import handle_simulation_results
@@ -904,13 +904,39 @@ if __name__ == '__main__':
     port = 8050
     url = f"http://{host}:{port}"
 
-    def open_browser():
-        webbrowser.open_new(url)
+    try:
+        # Desktop mode: run the Dash/Flask server on a background thread
+        # bound to localhost, then host it inside a native pywebview
+        # window instead of opening a browser tab. This is what makes
+        # VESDIO behave like a real offline desktop app rather than a
+        # web page the user has to keep a browser tab open for.
+        import webview
 
-    # For a bundled app, or when not in debug mode, open the browser directly.
-    # For debug mode, only open it in the main Werkzeug process to avoid multiple tabs.
-    if is_frozen or not os.environ.get("WERKZEUG_RUN_MAIN"):
-        Timer(1, open_browser).start()
+        def run_server():
+            # The reloader and debug mode are disabled here: the server
+            # runs on a background thread, and Werkzeug's reloader forks
+            # a second process, which does not play well with owning a
+            # native window on the main thread.
+            app.run(host=host, port=port, debug=False, use_reloader=False)
 
-    print(f"Application ready. Starting server on {url}")
-    app.run(host=host, port=port, debug=debug_mode)
+        server_thread = Thread(target=run_server, daemon=True)
+        server_thread.start()
+
+        print(f"Application ready. Opening native window pointed at {url}")
+        webview.create_window("VESDIO", url, width=1400, height=900, min_size=(1024, 700))
+        webview.start()
+    except ImportError:
+        # Fallback for any environment where pywebview isn't installed or
+        # doesn't have a usable GUI backend (e.g. this dev/CI sandbox):
+        # behave exactly as before and open a regular browser tab against
+        # the Dash server.
+        def open_browser():
+            webbrowser.open_new(url)
+
+        # For a bundled app, or when not in debug mode, open the browser directly.
+        # For debug mode, only open it in the main Werkzeug process to avoid multiple tabs.
+        if is_frozen or not os.environ.get("WERKZEUG_RUN_MAIN"):
+            Timer(1, open_browser).start()
+
+        print(f"pywebview not available; falling back to browser tab. Starting server on {url}")
+        app.run(host=host, port=port, debug=debug_mode)

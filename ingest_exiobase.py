@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 import json
 import os
+import shutil
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -13,6 +14,7 @@ load_dotenv()
 CURRENT_DIR = Path(os.getenv('DATA_DIR', Path(__file__).parent))
 RAW_DATA_DIR = Path(CURRENT_DIR / 'raw_data')
 EXIOBASE_DIR = Path(CURRENT_DIR / 'exiobase')
+ENCORE_DATA_DIR = Path(CURRENT_DIR / 'ENCORE_data')
 
 # Define start and end years
 YEAR_START = int(os.getenv('YEAR_START', '2021'))
@@ -22,13 +24,29 @@ YEAR_END = int(os.getenv('YEAR_END', '2021'))
 RAW_DATA_DIR.mkdir(exist_ok=True)
 EXIOBASE_DIR.mkdir(exist_ok=True)
 
-def ingest_and_save_exiobase(year=2021):
+def ingest_and_save_exiobase(year=2021, float32=None):
     """
     Downloads and processes EXIOBASE 3 data for a given year, then
     saves the necessary matrices and labels in Parquet and JSON format.
+
+    Args:
+        year: The EXIOBASE reference year to ingest.
+        float32: If True, save the dense L and G (Leontief/Ghosh inverse)
+            matrices as float32 instead of float64, roughly halving their
+            on-disk size. If None (default), this is controlled by the
+            BUNDLE_FLOAT32 environment variable ("1"/"true" to enable).
+            Default behavior (float64) is unchanged unless explicitly
+            requested — this flag exists to produce a smaller, shippable
+            offline data bundle (see `build_distributable_bundle` and
+            docs/PACKAGING.md).
     """
+    if float32 is None:
+        float32 = os.environ.get('BUNDLE_FLOAT32', '0').strip().lower() in ('1', 'true', 'yes')
+
     print(f"Starting EXIOBASE ingestion for the year {year}.")
     print("This is a one-time process that can take a long time and consume significant disk space.")
+    if float32:
+        print("BUNDLE_FLOAT32 enabled: L and G will be saved as float32 (halved size) instead of float64.")
 
     # --- 1. Find or Download Data ---
     print("Checking for existing EXIOBASE zip file...")
@@ -197,9 +215,15 @@ def ingest_and_save_exiobase(year=2021):
     output_dir.mkdir(exist_ok=True)
     print(f"Saving processed matrices to {output_dir}")
     
+    # L and G are dense NxN matrices and dominate the on-disk footprint;
+    # downcasting them to float32 (when requested) roughly halves their size
+    # with negligible precision loss for this application's purposes.
+    L_to_save = L_df.astype(np.float32) if float32 else L_df
+    G_to_save = G_df.astype(np.float32) if float32 else G_df
+
     A_df.to_parquet(output_dir / 'EXIOBASE_A.parquet')
-    L_df.to_parquet(output_dir / 'EXIOBASE_L.parquet')
-    G_df.to_parquet(output_dir / 'EXIOBASE_G.parquet')
+    L_to_save.to_parquet(output_dir / 'EXIOBASE_L.parquet')
+    G_to_save.to_parquet(output_dir / 'EXIOBASE_G.parquet')
     Y_df.to_parquet(output_dir / 'EXIOBASE_Y.parquet')
     E_df.to_parquet(output_dir / 'EXIOBASE_E.parquet')
     X_df.to_parquet(output_dir / 'EXIOBASE_X.parquet')
@@ -275,6 +299,104 @@ def create_production_history():
     
     print(f"Successfully created and saved production history to {output_path}")
     print("Post-processing complete.")
+
+def build_distributable_bundle(year=2021, output_dir=None, float32=True, include_ghosh=True):
+    """
+    Assembles the minimal offline data bundle needed to ship VESDIO as a
+    self-contained desktop app for a single reference year, so end users
+    never have to run the (multi-GB, multi-hour) EXIOBASE download/ingest
+    pipeline themselves. See docs/PACKAGING.md for the full offline
+    packaging story.
+
+    This does NOT (re-)download or parse EXIOBASE; it expects
+    `ingest_and_save_exiobase(year)` to have already been run so that
+    `<DATA_DIR>/exiobase/<year>/*.parquet` and `labels.json` exist. Given
+    that, it produces a bundle directory containing exactly:
+        exiobase/<year>/EXIOBASE_{A,L,G,Y,E,X}.parquet
+        exiobase/<year>/labels.json
+        exiobase/production_history.parquet   (if available)
+        ENCORE_data/encore_materiality.json    (if available)
+
+    Args:
+        year: The reference year to bundle (must already be ingested).
+        output_dir: Destination directory for the bundle. Defaults to
+            `<DATA_DIR>/bundle/<year>`.
+        float32: If True (default for a *distributable* bundle), the L and
+            G matrices are downcast to float32 in the bundle copy, roughly
+            halving their size (e.g. ~512MB -> ~256MB each), regardless of
+            what dtype they were originally ingested/saved as.
+        include_ghosh: If False, omit G (the Ghosh/supply-side inverse)
+            from the bundle entirely to further shrink it; supply-side
+            ("ghosh") scenarios will then be unavailable offline for this
+            bundle. Leontief-based scenarios are unaffected.
+
+    Returns:
+        The Path to the assembled bundle directory.
+    """
+    year_dir = EXIOBASE_DIR / str(year)
+    if not (year_dir / 'EXIOBASE_A.parquet').exists():
+        raise FileNotFoundError(
+            f"No ingested EXIOBASE data found for {year} at {year_dir}. "
+            f"Run ingest_and_save_exiobase({year}) first."
+        )
+
+    output_dir = Path(output_dir) if output_dir else (EXIOBASE_DIR.parent / 'bundle' / str(year))
+    bundle_exiobase_year_dir = output_dir / 'exiobase' / str(year)
+    bundle_exiobase_year_dir.mkdir(parents=True, exist_ok=True)
+
+    print(f"Building distributable bundle for {year} at {output_dir} "
+          f"(float32={float32}, include_ghosh={include_ghosh})")
+
+    # A, Y, E, X, labels.json are copied unchanged - they are small
+    # relative to the dense L/G inverses.
+    for name in ('EXIOBASE_A.parquet', 'EXIOBASE_Y.parquet', 'EXIOBASE_E.parquet', 'EXIOBASE_X.parquet'):
+        src = year_dir / name
+        if src.exists():
+            shutil.copy2(src, bundle_exiobase_year_dir / name)
+
+    labels_src = year_dir / 'labels.json'
+    if labels_src.exists():
+        shutil.copy2(labels_src, bundle_exiobase_year_dir / 'labels.json')
+
+    # L (and optionally G) are the big dense NxN matrices; re-save them at
+    # the requested dtype for the bundle rather than assuming the source
+    # year directory was already produced with BUNDLE_FLOAT32 set.
+    dtype = np.float32 if float32 else np.float64
+
+    L_df = pd.read_parquet(year_dir / 'EXIOBASE_L.parquet')
+    L_df.astype(dtype).to_parquet(bundle_exiobase_year_dir / 'EXIOBASE_L.parquet')
+
+    if include_ghosh:
+        g_src = year_dir / 'EXIOBASE_G.parquet'
+        if g_src.exists():
+            G_df = pd.read_parquet(g_src)
+            G_df.astype(dtype).to_parquet(bundle_exiobase_year_dir / 'EXIOBASE_G.parquet')
+        else:
+            print(f"Warning: {g_src} not found; bundle will not include G.")
+    else:
+        print("Skipping G (Ghosh inverse) in the bundle; supply-side (Ghosh) "
+              "scenarios will be unavailable offline for this bundle.")
+
+    # production_history.parquet powers the Historical tab; optional.
+    history_src = EXIOBASE_DIR / 'production_history.parquet'
+    if history_src.exists():
+        shutil.copy2(history_src, output_dir / 'exiobase' / 'production_history.parquet')
+    else:
+        print(f"Note: {history_src} not found; Historical tab will be empty in this bundle. "
+              f"Run create_production_history() to generate it.")
+
+    # encore_materiality.json powers ecosystem-service shocks; optional.
+    encore_src = ENCORE_DATA_DIR / 'encore_materiality.json'
+    if encore_src.exists():
+        bundle_encore_dir = output_dir / 'ENCORE_data'
+        bundle_encore_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(encore_src, bundle_encore_dir / 'encore_materiality.json')
+    else:
+        print(f"Warning: {encore_src} not found; ecosystem-service shocks will be "
+              f"unavailable in this bundle. Run ingest_encore.py first if needed.")
+
+    print(f"Bundle ready at {output_dir}")
+    return output_dir
 
 if __name__ == '__main__':
     # Ingest data for all available years in parallel
