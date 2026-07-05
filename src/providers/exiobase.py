@@ -49,8 +49,15 @@ def _generate_dummy_data(year=None):
 
     countries = ['C1', 'C2']
     sectors = ['S1', 'S2']
-    labels = [f'{c}-{s}' for c in countries for s in sectors]
-    size = len(labels)
+    # Use a (region, sector) MultiIndex — the same schema the real EXIOBASE
+    # matrices use — so the model code (which indexes with (region, sector)
+    # tuples) can actually run on the dummy fallback. Previously the dummy used
+    # flat 'C1-S1' string labels, which made every real model run fail.
+    idx = pd.MultiIndex.from_tuples(
+        [(c, s) for c in countries for s in sectors], names=['region', 'sector']
+    )
+    labels = [list(t) for t in idx]  # JSON-serialisable (region, sector) pairs
+    size = len(idx)
 
     # Save labels
     defaults = {
@@ -71,15 +78,15 @@ def _generate_dummy_data(year=None):
     np.random.seed(42)
     A_matrix = np.random.rand(size, size) * 0.2
     A_matrix = A_matrix / (A_matrix.sum(axis=0) * 2)
-    A_df = pd.DataFrame(A_matrix, index=labels, columns=labels)
+    A_df = pd.DataFrame(A_matrix, index=idx, columns=idx)
     A_df.to_parquet(output_dir / 'EXIOBASE_A.parquet')
 
     Y_matrix = np.random.randint(100, 1000, size=(size, 1))
-    Y_df = pd.DataFrame(Y_matrix, index=labels, columns=['FinalDemand'])
+    Y_df = pd.DataFrame(Y_matrix, index=idx, columns=['FinalDemand'])
     Y_df.to_parquet(output_dir / 'EXIOBASE_Y.parquet')
 
     E_matrix = np.random.uniform(0.01, 0.5, size=(size, 1))
-    E_df = pd.DataFrame(E_matrix, index=labels, columns=['LandUse'])
+    E_df = pd.DataFrame(E_matrix, index=idx, columns=['LandUse'])
     E_df.to_parquet(output_dir / 'EXIOBASE_E.parquet')
 
     I = np.identity(size)
@@ -90,11 +97,27 @@ def _generate_dummy_data(year=None):
         L_matrix = I  # Fallback L
         x_matrix = Y_matrix * 2
 
-    L_df = pd.DataFrame(L_matrix, index=labels, columns=labels)
+    L_df = pd.DataFrame(L_matrix, index=idx, columns=idx)
     L_df.to_parquet(output_dir / 'EXIOBASE_L.parquet')
 
-    x_df = pd.DataFrame(x_matrix, index=labels, columns=['GrossOutput'])
+    x_df = pd.DataFrame(x_matrix, index=idx, columns=['GrossOutput'])
     x_df.to_parquet(output_dir / 'EXIOBASE_X.parquet')
+
+    # G - Ghosh inverse. Previously omitted, which made the default Ghosh
+    # calculation fail on the dummy fallback (load fails on a missing
+    # EXIOBASE_G.parquet). Derive it from the same synthetic economy so the
+    # app runs end-to-end without real data: with Z = A * diag(x), the output
+    # (allocation) coefficient matrix is B = diag(1/x) * Z = diag(1/x) * A * diag(x),
+    # and the Ghosh inverse is G = (I - B)^-1.
+    x_vec = np.asarray(x_matrix, dtype=float).reshape(-1)
+    safe_x = np.where(x_vec > 0, x_vec, 1.0)
+    B_matrix = (np.diag(1.0 / safe_x) @ A_matrix) @ np.diag(safe_x)
+    try:
+        G_matrix = np.linalg.inv(I - B_matrix)
+    except np.linalg.LinAlgError:
+        G_matrix = I  # Fallback G
+    G_df = pd.DataFrame(G_matrix, index=idx, columns=idx)
+    G_df.to_parquet(output_dir / 'EXIOBASE_G.parquet')
 
     print(f"Generated and saved dummy data in {output_dir}.")
 

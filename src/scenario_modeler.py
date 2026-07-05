@@ -399,6 +399,14 @@ def attribute_output_change(model_method, delta_x, shock_maps, home_region, home
     if model_method == 'leontief' and L_df is not None:
         # Leontief: L_ij shows how much output from i is needed for 1 unit of final demand in j.
         # The contribution of a shock in sector i to sector j is L_ji * delta_x_i.
+        # NOTE: this is a *backward-linkage* (demand-side) attribution and is
+        # consistent with the demand-driven delta_x. It can legitimately be ~0
+        # when the shocked sector is *upstream* of home (home does not supply the
+        # shocked sector), which is not a bug — that upstream/forward "my supplier
+        # failed" effect is a supply-side phenomenon captured by the Ghosh branch
+        # below. Verified on a full multi-region MRIO (pymrio.load_test) where
+        # Leontief attribution is non-zero and matches |delta_x[home]|; the
+        # earlier zero seen on the degenerate 2x2 dummy was a topology artifact.
         for shock_label, shock_value in initial_shocks.items():
             contribution = L_df.loc[home_label, shock_label] * shock_value
             impact_causes[f"{shock_label[0]} - {shock_label[1]}"] = contribution
