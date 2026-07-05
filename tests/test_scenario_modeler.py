@@ -19,8 +19,18 @@ def test_leontief_model_shock(dummy_mrio_data):
     expected_change = -original_output * 0.5
     assert delta_x.loc[('C1', 'Farming')] == pytest.approx(expected_change)
 
-    # Assert the dependent sector (C1-Food Processing) is also impacted negatively
-    assert delta_x.loc[('C1', 'Food Processing')] < 0
+    # WS3 fix (finding A1): the Leontief mixed model is demand-driven with x_m specified
+    # on a *quantity* basis. It only propagates a shock through the backward linkage
+    # (how much the shocked sector itself buys from its endogenous suppliers) -- it
+    # cannot represent the forward-linkage/rationing effect of a customer being unable
+    # to source enough input from a shrunken supplier. In this fixture Farming supplies
+    # Food Processing but does not itself buy from any endogenous sector, so the
+    # theoretically-correct Leontief result is *no* change to Food Processing's output.
+    # (The previous "negative final demand" workaround faked a forward-linkage effect
+    # here with no sound theoretical basis, which is exactly what finding A1 flagged.
+    # The genuine forward/supply-side effect is captured by the Ghosh model below and by
+    # the constrained LP model in `tests/test_convergence_benchmark.py`.)
+    assert delta_x.loc[('C1', 'Food Processing')] == pytest.approx(0.0, abs=1e-8)
 
 def test_ghosh_model_shock(dummy_mrio_data):
     """

@@ -5,7 +5,7 @@ import plotly.graph_objects as go
 
 from src.config import get_valid_region_groups
 from src.data_loader import load_labels_data, load_production_history
-from src.scenario_modeler import run_physical_risk, run_physical_risk_ghosh, attribute_output_change, attribute_portfolio_change
+from src.scenario_modeler import run_physical_risk, run_physical_risk_ghosh, run_physical_risk_constrained, attribute_output_change, attribute_portfolio_change
 from src.plotting import (
     create_historical_production_plot, 
     create_waterfall_plot,
@@ -55,7 +55,16 @@ def handle_simulation_results(n_clicks, year, position_mode, portfolio_data, hom
             shock_maps.append({'region': country, 'sector': shock_sector, 'magnitude': magnitude_prop})
 
     # Run selected model
-    if model_method == 'ghosh':
+    # NOTE: `app.py`'s 'Calculation Method' RadioItems (id='model-method-toggle') should
+    # ideally gain a third, user-facing option (e.g. {'label': 'Constrained (Rigorous LP)',
+    # 'value': 'constrained'}) alongside 'leontief'/'ghosh' -- that UI change is out of
+    # scope here (WS1 owns layout), but the dispatch below already supports it.
+    solver_warning = None
+    if model_method == 'constrained':
+        # Supply-constrained reallocation LP (rigorous mode); falls back to the fast
+        # analytical Ghosh model (with a warning) if it can't solve within its time budget.
+        solver_warning, delta_x = run_physical_risk_constrained(A_df, X_df, Y_df, G_df, shock_maps)
+    elif model_method == 'ghosh':
         _, delta_x = run_physical_risk_ghosh(A_df, X_df, G_df, shock_maps)
     else: # Leontief
         _, delta_x = run_physical_risk(A_df, X_df, Y_df, L_df, shock_maps)
@@ -79,6 +88,9 @@ def handle_simulation_results(n_clicks, year, position_mode, portfolio_data, hom
             title_text = f"A {magnitude}% shock to '{shock_sector}' in {shock_region_name}..."
         else: # This handles the ecosystem service case where shock_sector is None
             title_text = f"An ecosystem service shock affecting {len(shock_maps)} sector(s)..."
+
+    if solver_warning:
+        title_text += f" (Note: {solver_warning})"
 
     # --- Handle Portfolio vs Single Asset ---
     if position_mode == 'portfolio' and portfolio_data:

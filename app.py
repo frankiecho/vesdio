@@ -186,11 +186,17 @@ app.layout = html.Div(style={'fontFamily': 'Arial, sans-serif', 'height': '100vh
                     style=dropdown_style
                 ),
                 html.Label("Calculation Method:", style={'marginTop': '10px'}),
+                # NOTE: this toggle is a minimal WS3 addition of the 'constrained' option
+                # value so the new rigorous LP solver (src/scenario_modeler.py) is
+                # reachable end-to-end. A proper 3-way control (styling, help text,
+                # runtime-expectation messaging for the slower solver) belongs to the
+                # WS1 UI-modernization workstream, not this change.
                 dcc.RadioItems(
                     id='model-method-toggle',
                     options=[
                         {'label': 'Leontief (Demand-Side)', 'value': 'leontief'},
                         {'label': 'Ghosh (Supply-Side)', 'value': 'ghosh'},
+                        {'label': 'Constrained (Rigorous LP, slower)', 'value': 'constrained'},
                     ],
                     value='ghosh',
                     labelStyle={'display': 'inline-block', 'marginRight': '10px'}
