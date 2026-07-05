@@ -17,6 +17,7 @@ from threading import Timer
 from src.data_loader import load_labels_data, load_mrio_matrices, load_production_history, load_encore_materiality
 from src.callbacks import handle_simulation_results
 from src.config import country_mapping, COUNTRY_CODES_3_LETTER, COLOR_PALETTE, get_valid_region_groups
+from src.es_shock import effective_magnitude, extract_sector_intensities
 
 # --- 1. Load Data and Pre-compute --- #
 # Data will be loaded within the callback based on the selected year
@@ -861,8 +862,13 @@ def run_and_update_all_results(n_clicks, year, position_mode, portfolio_data, ho
         if encore_data and ecosystem_service:
             service_data = next((item for item in encore_data if item["service"] == ecosystem_service), None)
             if service_data:
-                dependent_sectors = service_data['sectors']
-                
+                # `extract_sector_intensities` tolerates both the legacy
+                # encore_materiality.json schema (a plain list of sector-name strings,
+                # implying full dependency) and the enriched schema (a list of
+                # {"sector", "intensity"} dicts) so this keeps working even if the
+                # ingested data hasn't been regenerated with graded intensities yet.
+                sector_intensities = extract_sector_intensities(service_data)
+
                 # We need to get the list of countries for the selected region
                 _, ALL_COUNTRIES, _, _ = load_labels_data(year)
                 valid_region_groups = get_valid_region_groups(ALL_COUNTRIES)
@@ -874,16 +880,23 @@ def run_and_update_all_results(n_clicks, year, position_mode, portfolio_data, ho
                 else:
                     countries_to_shock = [shock_region]
 
-                # Create a list of shocks in the same format as the scenario builder
+                # Create a list of shocks in the same format as the scenario builder,
+                # but with each sector's magnitude differentiated by its ENCORE
+                # dependency intensity (src/es_shock.py) rather than every material
+                # sector receiving the same uniform `magnitude` (finding A2).
                 current_builder_shocks = []
                 for country in countries_to_shock:
-                    for sector in dependent_sectors:
-                        current_builder_shocks.append({'region': country, 'sector': sector, 'magnitude': magnitude})
-                
+                    for sector, intensity in sector_intensities.items():
+                        current_builder_shocks.append({
+                            'region': country,
+                            'sector': sector,
+                            'magnitude': effective_magnitude(magnitude, intensity),
+                        })
+
                 # Override shocks and mode
                 builder_shocks = current_builder_shocks
                 shock_mode = 'builder'
-                shock_sector = None 
+                shock_sector = None
                 shock_region = None
 
     # This callback now acts as a high-level orchestrator.
