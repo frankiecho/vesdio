@@ -11,17 +11,59 @@ CURRENT_DIR = Path(__file__).parent
 
 EXIOBASE_DIR = Path(os.getenv('DATA_DIR', CURRENT_DIR))  / 'ENCORE_data'
 
+# Ratings/crosswalk files ship inside a dated folder (e.g. "Updated ENCORE knowledge
+# base May 2026") that changes with every ENCORE release, so the folder is located by
+# glob rather than a hardcoded date -- pins the ingest to a specific ENCORE update.
+def _find_knowledge_base_dir():
+    candidates = sorted(EXIOBASE_DIR.glob('Updated ENCORE knowledge base *'))
+    if not candidates:
+        raise FileNotFoundError(
+            f"No 'Updated ENCORE knowledge base *' folder found under {EXIOBASE_DIR}. "
+            "Download the ENCORE knowledge base export and place it there."
+        )
+    return candidates[-1]  # lexicographically last -- newest, given "Month Year" naming
+
+
+# Real-world ENCORE CSV exports are not valid UTF-8 (Excel export artifacts: a UTF-8 BOM
+# plus stray non-breaking-space bytes elsewhere in free-text cells cause a UnicodeDecodeError
+# under plain 'utf-8'). 'utf-8-sig' strips the BOM correctly and 'replace' tolerates the
+# stray bytes (which land in descriptive text, not the codes/ratings this pipeline reads).
+_CSV_READ_KWARGS = dict(encoding='utf-8-sig', encoding_errors='replace')
+
+
 # Load dependency materiality ratings
 def load_dependency_materiality_ratings():
-    filepath = EXIOBASE_DIR / 'Updated ENCORE knowledge base September 2025' /  'ENCORE files' / '06. Dependency mat ratings.csv'
-    df = pd.read_csv(filepath, index_col='ISIC Unique code')
+    filepath = _find_knowledge_base_dir() / 'ENCORE files' / '06. Dependency mat ratings.csv'
+    df = pd.read_csv(filepath, index_col='ISIC Unique code', **_CSV_READ_KWARGS)
     return df
 
 # Load crosswalk between ENCORE sectors and EXIOBASE sectors
 def load_encore_exiobase_crosswalk():
-    filepath = EXIOBASE_DIR / 'Updated ENCORE knowledge base September 2025' /  'Crosswalk tables' / 'EXIOBASE NACE ISIC crosswalk.csv'
-    df = pd.read_csv(filepath, index_col='ISIC Unique Class code')
-    return df
+    crosswalk_dir = _find_knowledge_base_dir() / 'Crosswalk tables'
+    matches = sorted(crosswalk_dir.glob('EXIOBASE*ISIC*.csv'))
+    if not matches:
+        raise FileNotFoundError(f"No EXIOBASE/ISIC crosswalk CSV found under {crosswalk_dir}.")
+    df = pd.read_csv(matches[-1], **_CSV_READ_KWARGS)
+    df.columns = [c.strip() for c in df.columns]
+
+    # As of the May 2026 ENCORE update, the crosswalk carries BOTH ISIC Rev 4 and Rev 5
+    # classifications side by side (previously there was only one ISIC revision). The
+    # dependency materiality ratings file's 'ISIC Section/Division/Group/Class' columns
+    # match the Rev 4 convention (verified empirically: matching on Rev 4 columns joins
+    # ~99.9% of rows; Rev 5 columns are a materially different, mostly non-matching
+    # classification for the same activities). Select and rename the Rev 4 columns to
+    # the plain names the rest of this pipeline (and `06. Dependency mat ratings.csv`)
+    # expects, so this function's output shape is unchanged across ENCORE schema updates.
+    df = df.rename(columns={
+        'ISIC Rev. 4 Section': 'ISIC Section',
+        'ISIC Rev. 4. Division': 'ISIC Division',
+        'ISIC Rev 4. Group': 'ISIC Group',
+        'ISIC Rev 4. Class': 'ISIC Class',
+        'ISIC Rev. 4 Unique Code': 'ISIC Unique Class code',
+    })
+    keep_cols = ['EXIOBASE', 'ISIC Section', 'ISIC Division', 'ISIC Group', 'ISIC Class', 'ISIC Unique Class code']
+    df = df[[c for c in keep_cols if c in df.columns]]
+    return df.set_index('ISIC Unique Class code')
 
 # ENCORE rates each ISIC sub-sector's dependency on a service as one of
 # Very High / High / Medium / Low / Very Low. Map these onto a [0, 1] scale so a
