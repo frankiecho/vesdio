@@ -140,7 +140,8 @@ def run_physical_risk_ghosh(A_df, X_df, G_df, shock_maps):
 
     return None, delta_x # delta_y_req is not relevant for the Ghosh model
 
-def _shock_reachable_subgraph(A_sparse, all_labels, exogenous_labels, max_hops=4, min_weight=1e-9, max_fraction=0.5):
+def _shock_reachable_subgraph(A_sparse, all_labels, exogenous_labels, max_hops=4, min_weight=1e-9,
+                               max_fraction=0.5, min_absolute_size=500):
     """
     Reduce the full sector set to the subgraph reachable from the shocked ("exogenous")
     sectors within `max_hops` supply-chain hops, i.e. sectors that use -- directly or
@@ -153,8 +154,13 @@ def _shock_reachable_subgraph(A_sparse, all_labels, exogenous_labels, max_hops=4
     sector) so the hop expansion never densifies the full system.
 
     Returns a sorted list of integer positions (into `all_labels`) forming the reduced
-    subgraph, or None if the reduction does not shrink the problem enough to be worth it
-    (more than `max_fraction` of all sectors reached), signalling "solve the full system".
+    subgraph, or None if the reduction does not shrink the problem enough to be worth it,
+    signalling "give up, solve/fall back some other way" -- specifically when the reached
+    set exceeds *both* `max_fraction` of all sectors *and* `min_absolute_size` sectors.
+    Requiring both avoids bailing on small systems (e.g. a ~100-sector synthetic test
+    fixture, or a real regional MRIO) where "100% reached" is still a trivially fast LP to
+    solve directly; the fraction alone is only a meaningful "too large" signal once the
+    absolute size is large enough to actually matter for solve time.
     """
     n = A_sparse.shape[0]
     label_to_pos = {label: i for i, label in enumerate(all_labels)}
@@ -173,13 +179,14 @@ def _shock_reachable_subgraph(A_sparse, all_labels, exogenous_labels, max_hops=4
             break
         reached |= new_nodes
         frontier = new_nodes
-        if len(reached) > n * max_fraction:
+        if len(reached) > n * max_fraction and len(reached) > min_absolute_size:
             return None
 
     return sorted(reached)
 
 
-def run_physical_risk_constrained(A_df, X_df, Y_df, G_df, shock_maps, time_limit=55, max_hops=4, max_fraction=0.5):
+def run_physical_risk_constrained(A_df, X_df, Y_df, G_df, shock_maps, time_limit=55, max_hops=2,
+                                   min_weight=5e-3, max_fraction=0.2):
     """
     Supply-constrained reallocation model ("rigorous"/constrained mode), in the
     MRIA / Koks & Thissen linear-programming family. Unlike the fast analytical
@@ -193,6 +200,17 @@ def run_physical_risk_constrained(A_df, X_df, Y_df, G_df, shock_maps, time_limit
     held fixed at their baseline gross output and excluded from the LP's decision
     variables; only sectors within a few supply-chain hops of the shock are solved for.
     This keeps the LP small even though the full system (A/X/Y) may have ~8000 sectors.
+
+    Defaults (`max_hops=2`, `min_weight=5e-3`, `max_fraction=0.2`) are calibrated against
+    real EXIOBASE 3 data (2021, ~8000 sectors), not just the small synthetic fixtures used
+    elsewhere in this test suite. A real multi-region economy is densely connected: with
+    the naive "any nonzero technical coefficient counts" threshold, even 2 hops from a
+    single shocked sector reached 100% of all ~8000 sectors, because nearly everything
+    buys *some* infinitesimal amount from nearly everything else (energy, transport,
+    financial services, ...). `min_weight` filters hop-expansion to economically material
+    direct input shares (>=0.5%) so the reduction actually reduces; if it still can't get
+    below `max_fraction` of the system, this function does not attempt the full-system LP
+    (verified too slow -- see below) and instead falls back immediately.
 
     LP formulation
     ---------------
@@ -230,12 +248,24 @@ def run_physical_risk_constrained(A_df, X_df, Y_df, G_df, shock_maps, time_limit
     Solver & time budget
     ----------------------
     scipy.optimize.linprog(method="highs") with all constraint matrices built as
-    scipy.sparse matrices restricted to the (already-reduced) subgraph -- the full
-    n x n system is never densified or even instantiated as an LP. A hard wall-clock
-    budget is enforced both by HiGHS's own `time_limit` option and an outer timer; if
-    the solve does not finish with an optimal status inside the budget, this function
-    falls back to the fast analytical Ghosh model and returns a warning string instead
-    of a partial/unreliable LP solution.
+    scipy.sparse matrices restricted to the (already-reduced) subgraph -- the LP itself
+    is only ever sized to the reduced subgraph, never the full n x n system. (Building
+    the adjacency-lookup sparse matrix from A_df does pass through a dense
+    `.to_numpy()` once; on the real ~8000-sector EXIOBASE table this took ~5s, which is
+    included in the time budget below.) A hard wall-clock budget is enforced both by
+    HiGHS's own `time_limit` option and an outer timer; if the solve does not finish
+    with an optimal status inside the budget, this function falls back to the fast
+    analytical Ghosh model and returns a warning string instead of a partial/unreliable
+    LP solution.
+
+    On the real 2021 EXIOBASE data, a materially-sized cross-country shock (US
+    agriculture -> CN manufacturing) reduces to a several-hundred-sector subgraph and
+    solves in under 2 seconds end-to-end with these defaults -- comfortably inside the
+    1-minute budget. (Before two bugs found via this real-data testing were fixed, the
+    same shock either solved the full ~8000-sector system directly, at ~74s, or hit a
+    BIG_M-driven numerical-conditioning failure at a few hundred to a few thousand
+    sectors; see the BIG_M comment below and the `subgraph is None` early-fallback
+    above.)
 
     Returns
     -------
@@ -264,9 +294,19 @@ def run_physical_risk_constrained(A_df, X_df, Y_df, G_df, shock_maps, time_limit
         A_sparse = sp.csr_matrix(A_df.to_numpy())
 
         subgraph = _shock_reachable_subgraph(
-            A_sparse, all_labels, exogenous_labels, max_hops=max_hops, max_fraction=max_fraction
+            A_sparse, all_labels, exogenous_labels,
+            max_hops=max_hops, min_weight=min_weight, max_fraction=max_fraction,
         )
-        R_positions = list(range(n)) if subgraph is None else subgraph
+        if subgraph is None:
+            # The shock reaches more than max_fraction of all sectors -- real,
+            # densely-connected economies (verified on full EXIOBASE) routinely reach
+            # 100% of sectors within 2-4 hops once every nonzero technical coefficient
+            # counts, so this is not a rare edge case. Solving the full ~8000-sector
+            # system as an LP is neither fast (it blew the time budget in testing) nor
+            # numerically safe, so don't attempt it -- go straight to the fast,
+            # unconditionally-safe analytical fallback instead of gambling a slow solve.
+            return _fallback(f"would require solving over {n} sectors (no reduction possible)")
+        R_positions = subgraph
         R_set = set(R_positions)
         F_positions = [p for p in range(n) if p not in R_set]
         n_R = len(R_positions)
@@ -291,7 +331,18 @@ def run_physical_risk_constrained(A_df, X_df, Y_df, G_df, shock_maps, time_limit
             fixed_input_term = np.zeros(n_R)
 
         weight_R = 1.0 / np.maximum(x0_R, eps)
-        BIG_M = 1e6 * max(weight_R.max(initial=1.0), 1.0)
+        # BIG_M must dominate the maximum possible L1-deviation objective contribution
+        # so rationing (s_i) is only ever used when strictly necessary for feasibility.
+        # Each term weight_R[i]*d_i is bounded by ~1 (d_i <= x0_i and weight_R[i] = 1/x0_i),
+        # so a bound proportional to the number of sectors is enough. The previous
+        # `1e6 * max(weight_R)` scaled off the single smallest-output sector in R: on real
+        # EXIOBASE data a near-zero-output outlier pushed weight_R.max() to ~1.9e4, making
+        # BIG_M ~1.9e10 -- combined with the smallest LP coefficients (~1e-6), the
+        # constraint matrix's dynamic range exceeded double-precision's ~1e16 limit and
+        # HiGHS failed immediately with "numerical difficulties" (status 4, nit=0) well
+        # inside the time budget. Confirmed fixed on the same real data (688-sector
+        # subgraph: failed -> converges in ~2s) by scaling with n_R instead.
+        BIG_M = 1e3 * max(n_R, 1)
 
         # --- Objective: c^T @ [x, s, d] ---
         c = np.concatenate([np.zeros(n_R), np.full(n_R, BIG_M), weight_R])

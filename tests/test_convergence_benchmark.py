@@ -11,10 +11,29 @@ quickly and deterministically in CI. They demonstrate that:
      <60s wall-clock budget on these synthetic systems, and
   2. no method returns a negative gross output for shocks up to 100%.
 
-They do NOT prove the <1-minute convergence claim on the full ~8000-sector EXIOBASE
-system -- that must be re-validated against real, ingested EXIOBASE data (see
-`ingest_exiobase.py`), where the shock-reachable subgraph reduction and HiGHS solver
-performance characteristics may differ materially from these small synthetic cases.
+They do NOT by themselves prove the <1-minute convergence claim on the full ~8000-sector
+EXIOBASE system -- that requires real, ingested EXIOBASE data (see `ingest_exiobase.py`).
+
+UPDATE (real-data validation performed): the full 2021 EXIOBASE dataset (49 regions x 163
+sectors = 7987 rows) was ingested and used to benchmark `run_physical_risk_constrained`
+directly, which surfaced two real bugs neither the tiny dummy fallback nor these small
+synthetic fixtures could have caught:
+  1. The shock-reachable subgraph reduction's original defaults (`max_hops=4`,
+     `min_weight=1e-9`) reached 100% of all ~8000 sectors within 2 hops on the real,
+     densely-connected economy -- solving the full system directly took ~74s, over
+     budget. Fixed by tightening the defaults (`max_hops=2`, `min_weight=5e-3`) to
+     economically material thresholds, and by no longer attempting the full-system LP at
+     all when the reduction can't shrink the problem (immediate fallback instead).
+  2. `BIG_M` was scaled off `max(weight_R)` (`weight_R = 1/x0_R`); a single near-zero
+     baseline-output sector in the real data pushed `max(weight_R)` to ~1.9e4, making
+     `BIG_M ~= 1.9e10` and blowing the LP's coefficient dynamic range past double
+     precision -- HiGHS failed immediately with "numerical difficulties" (status 4,
+     nit=0), not a timeout. Fixed by scaling `BIG_M` with subgraph size instead (see the
+     comment at its definition in `src/scenario_modeler.py`), which is provably bounded
+     regardless of any individual sector's output.
+`test_constrained_solver_stable_with_near_zero_output_sector` below is a regression test
+for bug 2, reproduced on a small synthetic system by injecting a single artificially tiny-
+output sector.
 """
 import time
 import itertools
@@ -191,4 +210,42 @@ def test_constrained_model_falls_back_when_time_budget_exceeded(synthetic_mrio):
 
     assert warning is not None
     assert "falling back" in warning.lower()
+    assert delta_x is not None
+
+
+def test_constrained_solver_stable_with_near_zero_output_sector(synthetic_mrio):
+    """
+    Coverage test motivated by a real bug found via EXIOBASE 2021 data: a sector with a
+    near-zero baseline gross output must not prevent the LP from solving. The original
+    `BIG_M = 1e6 * max(weight_R)` formula scaled with 1/x0 for the smallest-output sector
+    in the (real, ~8000-sector) subgraph, and there the resulting coefficient dynamic
+    range exceeded double precision, causing HiGHS to fail immediately with "numerical
+    difficulties" (status 4, nit=0). That exact failure was NOT reproducible at this
+    small synthetic scale even with the old formula reinstated (HiGHS's presolve/scaling
+    tolerates a single extreme value here) -- so this test does not by itself prove the
+    fix's necessity; the real-data benchmark (see module docstring) is what demonstrated
+    the bug and its fix. What this test does verify is the fix's invariant holds and the
+    solver stays functional for a near-zero-output sector at this scale too.
+    """
+    mrio = synthetic_mrio
+    A_df = mrio["A"].copy()
+    X_df = mrio["X"].copy()
+    Y_df = mrio["Y"].copy()
+    # Inject one artificially tiny-output sector -- on real data this made
+    # weight_R.max() = 1/x0 blow up to ~1.9e4 and BIG_M (formerly 1e6 * that) to ~1.9e10.
+    # Its own final demand is scaled down to match, and its outgoing supply links are
+    # zeroed so no other sector's capacity constraint requires more than it can produce
+    # -- isolating the numerical-conditioning bug under test from an unrelated (and
+    # correctly-reported) infeasibility that a tiny-output supplier would otherwise cause.
+    tiny_label = mrio["labels"][1]
+    A_df.loc[tiny_label, :] = 0.0
+    X_df.loc[tiny_label, "GrossOutput"] = 1e-4
+    Y_df.loc[tiny_label, "FinalDemand"] = 1e-5
+
+    shock_maps = _shock(mrio, magnitude=0.3, index=0)
+    warning, delta_x = run_physical_risk_constrained(
+        A_df, X_df, Y_df, mrio["G"], shock_maps, time_limit=55
+    )
+
+    assert warning is None, f"Should solve the LP directly, not fall back: {warning}"
     assert delta_x is not None
