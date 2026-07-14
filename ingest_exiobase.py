@@ -110,11 +110,16 @@ def ingest_and_save_exiobase(year=2021, float32=None):
         print("No existing data file found. Downloading now...")
         # This will download the data into the 'raw_data' directory
         try:
-            zip_path = pymrio.download_exiobase3(storage_folder=RAW_DATA_DIR, years=year, system='ixi')
+            pymrio.download_exiobase3(storage_folder=RAW_DATA_DIR, years=year, system='ixi')
         except Exception as e:
             print(f"Failed to download EXIOBASE data. Error: {e}")
             print("Please check your internet connection and ensure you have sufficient disk space.")
             return
+        # download_exiobase3 returns MRIOMetaData, not the zip path, so
+        # re-glob the storage folder for the file it just wrote.
+        for f in RAW_DATA_DIR.glob(f'*{year}*.zip'):
+            zip_path = f
+            break
         print(f"Successfully downloaded data to {zip_path}")
     else:
         print(f"Using existing data from {zip_path}")
@@ -129,7 +134,15 @@ def ingest_and_save_exiobase(year=2021, float32=None):
 
     print("MRIO data parsed successfully.")
 
-    # --- 3. Extract and Transform Matrices ---
+    # --- 3. Calculate All System Matrices using pymrio ---
+    # Must run before extracting A/L/G/x below: parse_exiobase3 only
+    # populates the raw flow matrices (Z, Y, ...); A, x, L, G are derived
+    # and stay None until calc_all() computes them.
+    print("Calculating system matrices (A, L, G, x, etc.) using pymrio.calc_all()...")
+    mrio.calc_all(include_ghosh=True)
+    print("System matrices calculated.")
+
+    # --- 4. Extract and Transform Matrices ---
     print("Extracting and transforming matrices (A, Y, E, X).")
     
     # Flatten the MultiIndex to the 'Region-Sector' format used by the app
@@ -169,11 +182,6 @@ def ingest_and_save_exiobase(year=2021, float32=None):
     # X - Gross Output
     X_df = pd.DataFrame(mrio.x.copy())
     X_df.rename(columns={'indout': 'GrossOutput'}, inplace=True)
-
-    # --- 4. Calculate All System Matrices using pymrio ---
-    print("Calculating system matrices (L, G, etc.) using pymrio.calc_all()...")
-    mrio.calc_all(include_ghosh=True)
-    print("System matrices calculated.")
 
     L_df = mrio.L.copy()
     G_df = mrio.G.copy()
@@ -449,7 +457,7 @@ if __name__ == '__main__':
     # This will create subdirectories in the 'data' folder for each year
     import multiprocessing
 
-    years = list(range(YEAR_START, YEAR_END))
+    years = list(range(YEAR_START, YEAR_END + 1))
     
     # Use a Pool to manage worker processes
     # The number of processes will default to the number of available CPU cores

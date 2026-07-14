@@ -185,7 +185,26 @@ def _shock_reachable_subgraph(A_sparse, all_labels, exogenous_labels, max_hops=4
     return sorted(reached)
 
 
-def run_physical_risk_constrained(A_df, X_df, Y_df, G_df, shock_maps, time_limit=55, max_hops=2,
+def constrained_lp_would_fallback(A_df, shock_maps, max_hops=2, min_weight=5e-3, max_fraction=0.2):
+    """
+    Cheap pre-check for the UI: predicts whether `run_physical_risk_constrained` would
+    have to fall back to the analytical Ghosh model for the given shock, without running
+    the LP solve itself. Only catches the "shock reaches too much of the economy" case
+    (mirrors the `subgraph is None` branch above with the same default params as
+    `run_physical_risk_constrained`); solver time-outs/non-convergence can't be predicted
+    without actually solving, so those are still only caught at run time.
+    """
+    all_labels = A_df.index
+    exogenous_labels = [(shock['region'], shock['sector']) for shock in shock_maps]
+    A_sparse = sp.csr_matrix(A_df.to_numpy())
+    subgraph = _shock_reachable_subgraph(
+        A_sparse, all_labels, exogenous_labels,
+        max_hops=max_hops, min_weight=min_weight, max_fraction=max_fraction,
+    )
+    return subgraph is None
+
+
+def run_physical_risk_constrained(A_df, X_df, Y_df, G_df, shock_maps, time_limit=300, max_hops=2,
                                    min_weight=5e-3, max_fraction=0.2):
     """
     Supply-constrained reallocation model ("rigorous"/constrained mode), in the
@@ -261,7 +280,7 @@ def run_physical_risk_constrained(A_df, X_df, Y_df, G_df, shock_maps, time_limit
     On the real 2021 EXIOBASE data, a materially-sized cross-country shock (US
     agriculture -> CN manufacturing) reduces to a several-hundred-sector subgraph and
     solves in under 2 seconds end-to-end with these defaults -- comfortably inside the
-    1-minute budget. (Before two bugs found via this real-data testing were fixed, the
+    5-minute budget. (Before two bugs found via this real-data testing were fixed, the
     same shock either solved the full ~8000-sector system directly, at ~74s, or hit a
     BIG_M-driven numerical-conditioning failure at a few hundred to a few thousand
     sectors; see the BIG_M comment below and the `subgraph is None` early-fallback

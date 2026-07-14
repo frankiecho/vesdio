@@ -20,6 +20,7 @@ from src.callbacks import handle_simulation_results
 from src.plotting import create_builder_historical_plot
 from src.config import country_mapping, COUNTRY_CODES_3_LETTER, COLOR_PALETTE, get_valid_region_groups
 from src.es_shock import effective_magnitude, extract_sector_intensities
+from src.scenario_modeler import constrained_lp_would_fallback
 from src.design_tokens import COLORS, SPACING, TYPE
 
 # --- 1. Load Data and Pre-compute --- #
@@ -86,10 +87,11 @@ scroll_list_style = {
 years = list(range(1995, 2022))
 
 
-def step_card(step_number, title, children):
+def step_card(step_number, title, children, card_id=None):
     """A single step in the guided control-column flow: a numbered badge + title
-    over a card of controls. Purely a visual/skin element — no callback wiring."""
+    over a card of controls. `card_id` lets the paginated stepper show/hide it."""
     return dmc.Paper(
+        id=card_id,
         withBorder=True,
         radius="md",
         p=SPACING[4],
@@ -189,7 +191,7 @@ position_step = step_card(1, "Your Position / Portfolio", [
             ]),
         ]),
     ]),
-])
+], card_id='step-card-1')
 
 # --- Step 2: Define Shock Event --- #
 shock_step = step_card(2, "Define Shock Event", [
@@ -231,11 +233,8 @@ shock_step = step_card(2, "Define Shock Event", [
             ]),
         ]),
     ]),
-])
-
-# --- Step 3: Configure --- #
-configure_step = step_card(3, "Configure Simulation", [
-    html.Label("Shock Magnitude (%):", htmlFor='shock-magnitude-input', style={'marginTop': SPACING[2], 'display': 'block'}),
+    dmc.Divider(my=SPACING[3]),
+    html.Label("Shock Magnitude (%):", htmlFor='shock-magnitude-input', style={'display': 'block'}),
     dcc.Slider(
         id='shock-magnitude-input',
         min=0,
@@ -245,7 +244,11 @@ configure_step = step_card(3, "Configure Simulation", [
         marks={i: f'{i}%' for i in range(0, 101, 10)},
         tooltip={"placement": "bottom", "always_visible": True}
     ),
-    html.Label("Select Year:", htmlFor='year-dropdown', style={'display': 'block'}),
+], card_id='step-card-2')
+
+# --- Step 3: Configure --- #
+configure_step = step_card(3, "Configure Simulation", [
+    html.Label("Select Year:", htmlFor='year-dropdown', style={'marginTop': SPACING[2], 'display': 'block'}),
     dcc.Dropdown(
         id='year-dropdown',
         options=[{'label': str(y), 'value': y} for y in years],
@@ -263,7 +266,7 @@ configure_step = step_card(3, "Configure Simulation", [
         value='ghosh',
         labelStyle={'display': 'inline-block', 'marginRight': SPACING[2]},
     ),
-])
+], card_id='step-card-3')
 
 # --- Run step (moved to the end of the guided flow) --- #
 run_step = dmc.Paper(
@@ -289,27 +292,30 @@ run_step = dmc.Paper(
     ]
 )
 
-# Decorative progress rail — purely visual guidance through the flow below;
-# it does not gate/hide step content, so no additional callback wiring (and no
-# risk of orphaning ids that the existing callbacks depend on) is introduced.
+# Paginated step navigation: clicking a step in the rail shows only that
+# step's card below, and each step gets a checkmark once its required
+# fields are all filled in (tracked via step-validation-store).
 guided_stepper = dmc.Stepper(
     id='ui-guided-stepper',
-    active=3,
-    allowNextStepsSelect=False,
+    active=0,
+    allowNextStepsSelect=True,
     size="sm",
     color="vesdioBlue",
     mb=SPACING[5],
     children=[
-        dmc.StepperStep(label="Position", description="Who are you?"),
-        dmc.StepperStep(label="Shock", description="What happens?"),
-        dmc.StepperStep(label="Configure", description="How severe?"),
+        dmc.StepperStep(id='stepper-step-1', label="Position", description="Who are you?"),
+        dmc.StepperStep(id='stepper-step-2', label="Shock", description="What happens?"),
+        dmc.StepperStep(id='stepper-step-3', label="Configure", description="How severe?"),
     ]
 )
+
+step_validation_store = dcc.Store(id='step-validation-store', data={'step1': False, 'step2': False, 'step3': False})
 
 left_column = dmc.Stack(
     gap=0,
     children=[
         guided_stepper,
+        step_validation_store,
         position_step,
         shock_step,
         configure_step,
@@ -349,14 +355,7 @@ right_column = html.Div(children=[
     dcc.Loading(
         id="loading-results",
         type="default",
-        # We'll achieve a custom translucent overlay using styles instead of fullscreen=True
         parent_style={
-            'position': 'absolute',
-            'top': 0,
-            'left': 0,
-            'width': '100%',
-            'height': '100%',
-            'zIndex': 999,  # Ensure it's on top
             'minHeight': '90vh'
         },
         children=html.Div(id='results-output', style={'display': 'none'}, children=[
@@ -364,8 +363,8 @@ right_column = html.Div(children=[
             dcc.Tabs(id="results-tabs", children=[
                 dcc.Tab(label='Summary', children=[
                     dmc.Grid(mt=SPACING[5], children=[
-                        dmc.GridCol(span={"base": 12, "md": 6}, children=[dcc.Graph(id='home-impact-barchart')]),
-                        dmc.GridCol(span={"base": 12, "md": 6}, children=[dcc.Graph(id='impact-waterfall-chart')]),
+                        dmc.GridCol(span={"base": 12, "md": 6}, children=[dcc.Graph(id='home-impact-barchart', config={'responsive': True})]),
+                        dmc.GridCol(span={"base": 12, "md": 6}, children=[dcc.Graph(id='impact-waterfall-chart', config={'responsive': True})]),
                     ]),
                     # Display Options
                     html.Div(className='control-group', style={'marginTop': SPACING[5]}, children=[
@@ -385,12 +384,12 @@ right_column = html.Div(children=[
                 ]),
                 dcc.Tab(label='Geographic Impact', children=[
                     html.Div(style={'marginTop': SPACING[5]}, children=[
-                        dcc.Graph(id='country-impact-chart')
+                        dcc.Graph(id='country-impact-chart', config={'responsive': True})
                     ])
                 ]),
                 dcc.Tab(label='Supply Chain Flow', children=[
                     html.Div(style={'marginTop': SPACING[5]}, children=[
-                        dcc.Graph(id='sankey-diagram')
+                        dcc.Graph(id='sankey-diagram', config={'responsive': True})
                     ])
                 ]),
                 dcc.Tab(label='Global Impacts', children=[
@@ -409,7 +408,7 @@ right_column = html.Div(children=[
                     html.Div(id='top-impacts-table'),
                 ]),
                 dcc.Tab(label='Historical Context', children=[
-                    dcc.Graph(id='production-history-chart')
+                    dcc.Graph(id='production-history-chart', config={'responsive': True})
                 ]),
                 dcc.Tab(label='Portfolio Breakdown', id='portfolio-breakdown-tab', children=[
                     html.Div(id='portfolio-breakdown-content', style={'padding': SPACING[5]})
@@ -656,7 +655,7 @@ def update_dropdowns(year):
     sector_options = [{'label': s, 'value': s} for s in SECTORS]
 
     # Add ecosystem services options for the dropdown
-    encore_materiality = load_encore_materiality()
+    encore_materiality = load_encore_materiality() or []
     ecosystem_services = sorted([item['service'] for item in encore_materiality])
     ecosystem_service_options = [{'label': s, 'value': s} for s in ecosystem_services]
     default_ecosystem_service = ecosystem_services[0] if ecosystem_services else None
@@ -916,12 +915,14 @@ def update_scenario_store(add_clicks, clear_clicks, delete_clicks, upload_conten
     [Output('run-button', 'disabled'),
      Output('run-button-error-message', 'children')],
     [Input('position-mode-toggle', 'value'),
-     Input('portfolio-store', 'data')]
+     Input('portfolio-store', 'data'),
+     Input('step-validation-store', 'data')]
 )
-def update_run_button_state_and_message(position_mode, portfolio_data):
+def update_run_button_state_and_message(position_mode, portfolio_data, step_validation):
     """
     Disables the 'Run Simulation' button and shows an error message below it
-    if in portfolio mode and the total weight is not exactly 100%.
+    if in portfolio mode and the total weight is not exactly 100%, or if any
+    of the three guided steps is not yet fully filled in.
     """
     if position_mode == 'portfolio':
         total_weight = sum(item.get('weight', 0) for item in portfolio_data)
@@ -929,8 +930,83 @@ def update_run_button_state_and_message(position_mode, portfolio_data):
             error_text = f"Portfolio weight must be 100% (is {total_weight:.1f}%)"
             return True, error_text  # Disable button and show error message
 
+    step_validation = step_validation or {}
+    if not all(step_validation.get(k) for k in ('step1', 'step2', 'step3')):
+        return True, "Complete steps 1-3 to run the simulation"
+
     # In all other cases, enable the button and clear the error message
     return False, ""
+
+
+@app.callback(
+    Output('step-validation-store', 'data'),
+    [Input('position-mode-toggle', 'value'),
+     Input('home-region-dropdown', 'value'),
+     Input('home-sector-dropdown', 'value'),
+     Input('portfolio-store', 'data'),
+     Input('shock-type-toggle', 'value'),
+     Input('shock-region-dropdown', 'value'),
+     Input('shock-sector-dropdown', 'value'),
+     Input('ecosystem-service-dropdown', 'value'),
+     Input('scenario-store', 'data'),
+     Input('shock-magnitude-input', 'value'),
+     Input('year-dropdown', 'value'),
+     Input('model-method-toggle', 'value')]
+)
+def compute_step_validation(position_mode, home_region, home_sector, portfolio_data,
+                             shock_type, shock_region, shock_sector, ecosystem_service,
+                             scenario_data, magnitude, year, method):
+    """Tracks whether each guided step's required fields are all filled in."""
+    if position_mode == 'portfolio':
+        total_weight = sum(item.get('weight', 0) for item in (portfolio_data or []))
+        step1_valid = bool(portfolio_data) and np.isclose(total_weight, 100)
+    else:
+        step1_valid = bool(home_region) and bool(home_sector)
+
+    if scenario_data:
+        step2_valid = True
+    elif shock_type == 'sector':
+        step2_valid = bool(shock_region) and bool(shock_sector)
+    else:
+        step2_valid = bool(shock_region) and bool(ecosystem_service)
+    step2_valid = step2_valid and magnitude is not None
+
+    step3_valid = year is not None and bool(method)
+
+    return {'step1': step1_valid, 'step2': step2_valid, 'step3': step3_valid}
+
+
+@app.callback(
+    [Output('stepper-step-1', 'icon'),
+     Output('stepper-step-2', 'icon'),
+     Output('stepper-step-3', 'icon')],
+    Input('step-validation-store', 'data')
+)
+def update_stepper_ticks(step_validation):
+    """Shows a checkmark on a step's badge once that step is fully validated."""
+    step_validation = step_validation or {}
+    return tuple(
+        "✓" if step_validation.get(k) else None
+        for k in ('step1', 'step2', 'step3')
+    )
+
+
+@app.callback(
+    [Output('step-card-1', 'style'),
+     Output('step-card-2', 'style'),
+     Output('step-card-3', 'style')],
+    Input('ui-guided-stepper', 'active')
+)
+def show_active_step_card(active):
+    """Paginates the guided flow: only the card for the clicked/active step is shown."""
+    active = active if active is not None else 0
+    styles = [{'display': 'none'}] * 3
+    if 0 <= active < 3:
+        styles[active] = {'display': 'block'}
+    else:
+        styles = [{'display': 'block'}] * 3
+    return styles
+
 
 @app.callback(
     [Output('builder-single-chart', 'figure'),
@@ -1113,6 +1189,70 @@ def toggle_results_empty_state(n_clicks):
             'borderRadius': 'var(--radius-lg)',
         }
     return {'display': 'none'}
+
+@app.callback(
+    [Output('model-method-toggle', 'options'),
+     Output('model-method-toggle', 'value')],
+    [Input('year-dropdown', 'value'),
+     Input('shock-type-toggle', 'value'),
+     Input('shock-region-dropdown', 'value'),
+     Input('shock-sector-dropdown', 'value'),
+     Input('ecosystem-service-dropdown', 'value'),
+     Input('shock-magnitude-input', 'value'),
+     Input('scenario-store', 'data'),
+     Input('encore-data-store', 'data')],
+    State('model-method-toggle', 'value')
+)
+def update_constrained_lp_availability(year, shock_type, shock_region, shock_sector, ecosystem_service,
+                                        magnitude, builder_shocks, encore_data, current_method):
+    """Greys out the Constrained (LP) method whenever the currently-configured shock is
+    predicted to need the analytical fallback (see `constrained_lp_would_fallback`), and
+    silently switches away from it to Ghosh so the user can't select an option that
+    won't actually run as the rigorous LP."""
+    base_options = [
+        {'label': 'Leontief (Demand-Side)', 'value': 'leontief'},
+        {'label': 'Ghosh (Supply-Side)', 'value': 'ghosh'},
+        {'label': 'Constrained (Rigorous LP, slower)', 'value': 'constrained'},
+    ]
+
+    shock_maps = builder_shocks or []
+    if not shock_maps:
+        if shock_type == 'ecosystem':
+            if encore_data and ecosystem_service and shock_region and magnitude is not None:
+                service_data = next((item for item in encore_data if item["service"] == ecosystem_service), None)
+                if service_data:
+                    sector_intensities = extract_sector_intensities(service_data)
+                    _, ALL_COUNTRIES, _, _ = load_labels_data(year)
+                    valid_region_groups = get_valid_region_groups(ALL_COUNTRIES)
+                    if shock_region == 'All':
+                        countries_to_shock = ALL_COUNTRIES
+                    elif shock_region in valid_region_groups:
+                        countries_to_shock = valid_region_groups[shock_region]
+                    else:
+                        countries_to_shock = [shock_region]
+                    shock_maps = [
+                        {'region': country, 'sector': sector, 'magnitude': effective_magnitude(magnitude, intensity)}
+                        for country in countries_to_shock
+                        for sector, intensity in sector_intensities.items()
+                    ]
+        elif shock_region and shock_sector and magnitude is not None:
+            shock_maps = [{'region': shock_region, 'sector': shock_sector, 'magnitude': magnitude}]
+
+    would_fallback = False
+    if shock_maps:
+        try:
+            A_df, _, _, _, _ = get_cached_matrices(year)
+            would_fallback = constrained_lp_would_fallback(A_df, shock_maps)
+        except Exception:
+            would_fallback = False
+
+    options = [dict(opt) for opt in base_options]
+    if would_fallback:
+        options[2]['disabled'] = True
+
+    new_value = 'ghosh' if (would_fallback and current_method == 'constrained') else dash.no_update
+    return options, new_value
+
 
 @app.callback(
     Output('scenario-summary-header', 'children'),
