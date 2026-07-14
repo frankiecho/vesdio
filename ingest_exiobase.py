@@ -1,8 +1,33 @@
+"""
+EXIOBASE 3 ingestion.
+
+This is today's only concrete ingest pipeline: download/parse EXIOBASE 3 via
+`pymrio.parse_exiobase3`, then hand the parsed matrices + labels off to
+`save_mrio_provider_bundle()` below, which writes the standard per-year
+`<prefix>_<matrix>.parquet` + `labels.json` bundle that
+`src.providers.exiobase.ExiobaseProvider` (and, generically,
+`src.providers.base.MRIOProvider`) expects to read.
+
+Extension point for Workstream 5 (swappable IO-database core): a future
+`ingest_<db>.py` for e.g. OECD ICIO / GLORIA / WIOD should follow the same
+shape —
+  1. obtain/parse that database (pymrio already ships `parse_oecd` and
+     `parse_wiod` parsers; GLORIA would need a custom parser),
+  2. derive A, L, G, X, Y, E in the same (region, sector) MultiIndex layout
+     used here,
+  3. call `save_mrio_provider_bundle(output_dir, prefix, matrices, labels_data)`
+     to persist them,
+  4. add a corresponding `<Db>Provider(MRIOProvider)` in `src/providers/`
+     (see `src/providers/exiobase.py` as the reference implementation) and
+     register it in `src/providers/__init__.py`.
+No other application code needs to change to support a new provider.
+"""
 import pymrio
 import pandas as pd
 import numpy as np
 import json
 import os
+import shutil
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -13,6 +38,7 @@ load_dotenv()
 CURRENT_DIR = Path(os.getenv('DATA_DIR', Path(__file__).parent))
 RAW_DATA_DIR = Path(CURRENT_DIR / 'raw_data')
 EXIOBASE_DIR = Path(CURRENT_DIR / 'exiobase')
+ENCORE_DATA_DIR = Path(CURRENT_DIR / 'ENCORE_data')
 
 # Define start and end years
 YEAR_START = int(os.getenv('YEAR_START', '2021'))
@@ -22,13 +48,54 @@ YEAR_END = int(os.getenv('YEAR_END', '2021'))
 RAW_DATA_DIR.mkdir(exist_ok=True)
 EXIOBASE_DIR.mkdir(exist_ok=True)
 
-def ingest_and_save_exiobase(year=2021):
+def save_mrio_provider_bundle(output_dir, prefix, matrices, labels_data):
+    """
+    Generic "persist a parsed MRIO provider's matrices" step, factored out of
+    the EXIOBASE-specific ingest below so a future provider's ingest script
+    can reuse it instead of reimplementing the save + labels logic.
+
+    - output_dir: per-year directory, e.g. data/exiobase/2021
+    - prefix: file-naming prefix, e.g. "EXIOBASE" -> EXIOBASE_A.parquet
+      (kept as a parameter, rather than hardcoded, so a new provider can use
+      its own prefix while reusing this function)
+    - matrices: dict of {matrix_name: DataFrame}, e.g.
+      {'A': A_df, 'L': L_df, 'G': G_df, 'Y': Y_df, 'E': E_df, 'X': X_df}
+    - labels_data: dict with 'countries', 'sectors', 'labels', 'defaults'
+      (see ExiobaseProvider.load_labels / labels.json schema)
+    """
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    for matrix_name, df in matrices.items():
+        df.to_parquet(output_dir / f'{prefix}_{matrix_name}.parquet')
+
+    with open(output_dir / 'labels.json', 'w') as f:
+        json.dump(labels_data, f, indent=4)
+
+
+def ingest_and_save_exiobase(year=2021, float32=None):
     """
     Downloads and processes EXIOBASE 3 data for a given year, then
     saves the necessary matrices and labels in Parquet and JSON format.
+
+    Args:
+        year: The EXIOBASE reference year to ingest.
+        float32: If True, save the dense L and G (Leontief/Ghosh inverse)
+            matrices as float32 instead of float64, roughly halving their
+            on-disk size. If None (default), this is controlled by the
+            BUNDLE_FLOAT32 environment variable ("1"/"true" to enable).
+            Default behavior (float64) is unchanged unless explicitly
+            requested — this flag exists to produce a smaller, shippable
+            offline data bundle (see `build_distributable_bundle` and
+            docs/PACKAGING.md).
     """
+    if float32 is None:
+        float32 = os.environ.get('BUNDLE_FLOAT32', '0').strip().lower() in ('1', 'true', 'yes')
+
     print(f"Starting EXIOBASE ingestion for the year {year}.")
     print("This is a one-time process that can take a long time and consume significant disk space.")
+    if float32:
+        print("BUNDLE_FLOAT32 enabled: L and G will be saved as float32 (halved size) instead of float64.")
 
     # --- 1. Find or Download Data ---
     print("Checking for existing EXIOBASE zip file...")
@@ -43,11 +110,16 @@ def ingest_and_save_exiobase(year=2021):
         print("No existing data file found. Downloading now...")
         # This will download the data into the 'raw_data' directory
         try:
-            zip_path = pymrio.download_exiobase3(storage_folder=RAW_DATA_DIR, years=year, system='ixi')
+            pymrio.download_exiobase3(storage_folder=RAW_DATA_DIR, years=year, system='ixi')
         except Exception as e:
             print(f"Failed to download EXIOBASE data. Error: {e}")
             print("Please check your internet connection and ensure you have sufficient disk space.")
             return
+        # download_exiobase3 returns MRIOMetaData, not the zip path, so
+        # re-glob the storage folder for the file it just wrote.
+        for f in RAW_DATA_DIR.glob(f'*{year}*.zip'):
+            zip_path = f
+            break
         print(f"Successfully downloaded data to {zip_path}")
     else:
         print(f"Using existing data from {zip_path}")
@@ -62,7 +134,15 @@ def ingest_and_save_exiobase(year=2021):
 
     print("MRIO data parsed successfully.")
 
-    # --- 3. Extract and Transform Matrices ---
+    # --- 3. Calculate All System Matrices using pymrio ---
+    # Must run before extracting A/L/G/x below: parse_exiobase3 only
+    # populates the raw flow matrices (Z, Y, ...); A, x, L, G are derived
+    # and stay None until calc_all() computes them.
+    print("Calculating system matrices (A, L, G, x, etc.) using pymrio.calc_all()...")
+    mrio.calc_all(include_ghosh=True)
+    print("System matrices calculated.")
+
+    # --- 4. Extract and Transform Matrices ---
     print("Extracting and transforming matrices (A, Y, E, X).")
     
     # Flatten the MultiIndex to the 'Region-Sector' format used by the app
@@ -102,11 +182,6 @@ def ingest_and_save_exiobase(year=2021):
     # X - Gross Output
     X_df = pd.DataFrame(mrio.x.copy())
     X_df.rename(columns={'indout': 'GrossOutput'}, inplace=True)
-
-    # --- 4. Calculate All System Matrices using pymrio ---
-    print("Calculating system matrices (L, G, etc.) using pymrio.calc_all()...")
-    mrio.calc_all(include_ghosh=True)
-    print("System matrices calculated.")
 
     L_df = mrio.L.copy()
     G_df = mrio.G.copy()
@@ -160,7 +235,9 @@ def ingest_and_save_exiobase(year=2021):
 
     # Find the largest inter-country, inter-sector dependency.
     # We loop to ensure we don't pick a scenario where the shock and home sectors are the same.
-    temp_L = L_filtered.to_numpy()
+    # copy=True: recent pandas can return a read-only view from .to_numpy() for a
+    # boolean-masked/sliced DataFrame, and we mutate temp_L in-place below.
+    temp_L = L_filtered.to_numpy(copy=True)
     max_dependency = 0
     
     for _ in range(10): # Try up to 10 times to find a valid pair
@@ -192,20 +269,12 @@ def ingest_and_save_exiobase(year=2021):
         default_shock_region = regions[1] if len(regions) > 1 else regions[0]
         default_shock_sector = sectors[1] if len(sectors) > 1 else sectors[0]
 
-    # --- 7. Save Processed Data ---
+    # --- 7 & 8. Save Processed Data, Labels and Defaults ---
     output_dir = EXIOBASE_DIR / str(year)
-    output_dir.mkdir(exist_ok=True)
     print(f"Saving processed matrices to {output_dir}")
-    
-    A_df.to_parquet(output_dir / 'EXIOBASE_A.parquet')
-    L_df.to_parquet(output_dir / 'EXIOBASE_L.parquet')
-    G_df.to_parquet(output_dir / 'EXIOBASE_G.parquet')
-    Y_df.to_parquet(output_dir / 'EXIOBASE_Y.parquet')
-    E_df.to_parquet(output_dir / 'EXIOBASE_E.parquet')
-    X_df.to_parquet(output_dir / 'EXIOBASE_X.parquet')
-
     # --- 8. Save Labels and Defaults ---
     print("Saving labels and default scenario to JSON.")
+
     labels_data = {
         'countries': list(mrio.get_regions()),
         'sectors': list(mrio.get_sectors()),
@@ -217,8 +286,17 @@ def ingest_and_save_exiobase(year=2021):
             'shock_sector': default_shock_sector
         }
     }
-    with open(output_dir / 'labels.json', 'w') as f:
-        json.dump(labels_data, f, indent=4)
+    # L and G are dense NxN matrices and dominate the on-disk footprint;
+    # downcasting them to float32 (when requested) roughly halves their size
+    # with negligible precision loss for this application's purposes.
+    L_to_save = L_df.astype(np.float32) if float32 else L_df
+    G_to_save = G_df.astype(np.float32) if float32 else G_df
+    save_mrio_provider_bundle(
+        output_dir,
+        prefix='EXIOBASE',
+        matrices={'A': A_df, 'L': L_to_save, 'G': G_to_save, 'Y': Y_df, 'E': E_df, 'X': X_df},
+        labels_data=labels_data,
+    )
 
     print("\n-----------------------------------------------------")
     print("Ingestion complete!")
@@ -276,12 +354,110 @@ def create_production_history():
     print(f"Successfully created and saved production history to {output_path}")
     print("Post-processing complete.")
 
+def build_distributable_bundle(year=2021, output_dir=None, float32=True, include_ghosh=True):
+    """
+    Assembles the minimal offline data bundle needed to ship VESDIO as a
+    self-contained desktop app for a single reference year, so end users
+    never have to run the (multi-GB, multi-hour) EXIOBASE download/ingest
+    pipeline themselves. See docs/PACKAGING.md for the full offline
+    packaging story.
+
+    This does NOT (re-)download or parse EXIOBASE; it expects
+    `ingest_and_save_exiobase(year)` to have already been run so that
+    `<DATA_DIR>/exiobase/<year>/*.parquet` and `labels.json` exist. Given
+    that, it produces a bundle directory containing exactly:
+        exiobase/<year>/EXIOBASE_{A,L,G,Y,E,X}.parquet
+        exiobase/<year>/labels.json
+        exiobase/production_history.parquet   (if available)
+        ENCORE_data/encore_materiality.json    (if available)
+
+    Args:
+        year: The reference year to bundle (must already be ingested).
+        output_dir: Destination directory for the bundle. Defaults to
+            `<DATA_DIR>/bundle/<year>`.
+        float32: If True (default for a *distributable* bundle), the L and
+            G matrices are downcast to float32 in the bundle copy, roughly
+            halving their size (e.g. ~512MB -> ~256MB each), regardless of
+            what dtype they were originally ingested/saved as.
+        include_ghosh: If False, omit G (the Ghosh/supply-side inverse)
+            from the bundle entirely to further shrink it; supply-side
+            ("ghosh") scenarios will then be unavailable offline for this
+            bundle. Leontief-based scenarios are unaffected.
+
+    Returns:
+        The Path to the assembled bundle directory.
+    """
+    year_dir = EXIOBASE_DIR / str(year)
+    if not (year_dir / 'EXIOBASE_A.parquet').exists():
+        raise FileNotFoundError(
+            f"No ingested EXIOBASE data found for {year} at {year_dir}. "
+            f"Run ingest_and_save_exiobase({year}) first."
+        )
+
+    output_dir = Path(output_dir) if output_dir else (EXIOBASE_DIR.parent / 'bundle' / str(year))
+    bundle_exiobase_year_dir = output_dir / 'exiobase' / str(year)
+    bundle_exiobase_year_dir.mkdir(parents=True, exist_ok=True)
+
+    print(f"Building distributable bundle for {year} at {output_dir} "
+          f"(float32={float32}, include_ghosh={include_ghosh})")
+
+    # A, Y, E, X, labels.json are copied unchanged - they are small
+    # relative to the dense L/G inverses.
+    for name in ('EXIOBASE_A.parquet', 'EXIOBASE_Y.parquet', 'EXIOBASE_E.parquet', 'EXIOBASE_X.parquet'):
+        src = year_dir / name
+        if src.exists():
+            shutil.copy2(src, bundle_exiobase_year_dir / name)
+
+    labels_src = year_dir / 'labels.json'
+    if labels_src.exists():
+        shutil.copy2(labels_src, bundle_exiobase_year_dir / 'labels.json')
+
+    # L (and optionally G) are the big dense NxN matrices; re-save them at
+    # the requested dtype for the bundle rather than assuming the source
+    # year directory was already produced with BUNDLE_FLOAT32 set.
+    dtype = np.float32 if float32 else np.float64
+
+    L_df = pd.read_parquet(year_dir / 'EXIOBASE_L.parquet')
+    L_df.astype(dtype).to_parquet(bundle_exiobase_year_dir / 'EXIOBASE_L.parquet')
+
+    if include_ghosh:
+        g_src = year_dir / 'EXIOBASE_G.parquet'
+        if g_src.exists():
+            G_df = pd.read_parquet(g_src)
+            G_df.astype(dtype).to_parquet(bundle_exiobase_year_dir / 'EXIOBASE_G.parquet')
+        else:
+            print(f"Warning: {g_src} not found; bundle will not include G.")
+    else:
+        print("Skipping G (Ghosh inverse) in the bundle; supply-side (Ghosh) "
+              "scenarios will be unavailable offline for this bundle.")
+
+    # production_history.parquet powers the Historical tab; optional.
+    history_src = EXIOBASE_DIR / 'production_history.parquet'
+    if history_src.exists():
+        shutil.copy2(history_src, output_dir / 'exiobase' / 'production_history.parquet')
+    else:
+        print(f"Note: {history_src} not found; Historical tab will be empty in this bundle. "
+              f"Run create_production_history() to generate it.")
+
+    # encore_materiality.json powers ecosystem-service shocks; optional.
+    encore_src = ENCORE_DATA_DIR / 'encore_materiality.json'
+    if encore_src.exists():
+        bundle_encore_dir = output_dir / 'ENCORE_data'
+        bundle_encore_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(encore_src, bundle_encore_dir / 'encore_materiality.json')
+    else:
+        print(f"Warning: {encore_src} not found; ecosystem-service shocks will be "
+              f"unavailable in this bundle. Run ingest_encore.py first if needed.")
+
+    print(f"Bundle ready at {output_dir}")
+    return output_dir
+
 if __name__ == '__main__':
     # Ingest data for all available years in parallel
     # This will create subdirectories in the 'data' folder for each year
     import multiprocessing
 
-    years = list(range(YEAR_START, YEAR_END))
+    years = list(range(YEAR_START, YEAR_END + 1))
     
     # Use a Pool to manage worker processes
     # The number of processes will default to the number of available CPU cores

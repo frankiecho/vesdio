@@ -2,3 +2,15 @@ build/
 dist/
 __pycache__
 .env
+.claude/
+data/
+src/technical_documentation.md
+revision_workspace/
+logs/
+docs/
+vesdio_dist/
+manuscript_*.md
+supplementary_information_*.md
+scenario*.json
+.DS_Store
+.vscode

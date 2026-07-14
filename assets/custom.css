@@ -8,3 +8,39 @@
 .Select-menu-outer .Select-option {
     padding: 8px 12px;
 }
+
+/*
+  Screen-reader-only text: used for <legend> elements that group radio
+  buttons (dcc.RadioItems doesn't expose an aria-label prop), so assistive
+  tech still announces the group's purpose without showing redundant text
+  visually next to the already-visible section heading.
+*/
+.visually-hidden {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+}
+
+/*
+  Responsive layout (WS1): the two-column control/results split is built on
+  dash-mantine-components' dmc.Grid, whose GridCol `span={"base": 12, "md": N}`
+  props already stack columns to full-width below Mantine's `md` breakpoint
+  (~768px). This rule is a belt-and-suspenders narrow-viewport pass for the
+  non-Mantine content (dcc.Tabs, dash_table) so nothing overflows horizontally
+  on small screens.
+*/
+@media (max-width: 768px) {
+  .control-group {
+    padding: var(--space-3) !important;
+  }
+  .dash-table-container,
+  .rc-slider {
+    max-width: 100%;
+  }
+}

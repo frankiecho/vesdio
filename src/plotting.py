@@ -406,16 +406,16 @@ def create_portfolio_breakdown_display(portfolio_data, delta_x, X_df, country_ma
     total_abs_change = total_after - total_before
     total_rel_change = (total_abs_change / total_before) * 100 if total_before > 1e-9 else 0
 
-    summary_style = {'fontSize': '1.2em', 'fontWeight': 'bold', 'padding': '10px', 'borderTop': '2px solid black', 'marginTop': '20px'}
+    summary_style = {'fontSize': '1.2em', 'fontWeight': 'bold', 'padding': 'var(--space-2)', 'borderTop': '2px solid var(--color-text)', 'marginTop': 'var(--space-5)'}
     summary = html.Div([
         html.H4("Total Portfolio Impact"),
         html.Table([
             html.Tr([
-                html.Td("Total Absolute Change:", style={'paddingRight': '20px'}),
+                html.Td("Total Absolute Change:", style={'paddingRight': 'var(--space-5)'}),
                 html.Td(f"{total_abs_change:,.0f}", style={'color': COLOR_PALETTE['red'] if total_abs_change < 0 else COLOR_PALETTE['green']})
             ]),
             html.Tr([
-                html.Td("Total Relative Change:", style={'paddingRight': '20px'}),
+                html.Td("Total Relative Change:", style={'paddingRight': 'var(--space-5)'}),
                 html.Td(f"{total_rel_change:.2f}%", style={'color': COLOR_PALETTE['red'] if total_rel_change < 0 else COLOR_PALETTE['green']})
             ])
         ])

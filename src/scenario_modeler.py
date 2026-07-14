@@ -1,5 +1,8 @@
+import time
 import numpy as np
 import pandas as pd
+import scipy.sparse as sp
+from scipy.optimize import linprog
 import dask.dataframe as dd
 import dask.array as da
 from src.data_loader import load_mrio_matrices
@@ -28,7 +31,6 @@ def run_physical_risk(A_df, X_df, Y_df, L_df, shock_maps):
 
     # Partition the A matrix and Y vector
     A_nm = A_df.loc[endogenous_labels, exogenous_labels]
-    A_mn = A_df.loc[exogenous_labels, endogenous_labels]
     y_n = Y_df.loc[endogenous_labels, 'FinalDemand']
 
     # --- Core of the Mixed Model (Partitioning Method) ---
@@ -47,19 +49,27 @@ def run_physical_risk(A_df, X_df, Y_df, L_df, shock_maps):
     # This is the Leontief inverse for the endogenous-only system, derived efficiently.
     endogenous_leontief_inv = L_nn - (L_nm @ L_mm_inv @ L_mn)
 
-    # --- Corrected Calculation for New Endogenous Output ---
-    # The standard mixed-model equation is x_n = (I - A_nn)⁻¹ * (A_nm * x_m_new + y_n).
-    # However, this formula assumes the shock is on the *demand* side. For a supply-side
-    # shock where inputs are constrained, we must adjust the final demand vector.
-    # We calculate the change in inputs required by endogenous sectors from the shocked sectors.
-    x_m_old = X_df.loc[exogenous_labels, 'GrossOutput'].to_numpy()
-    delta_x_m = x_m_new.to_numpy() - x_m_old
-    unavailable_inputs = A_mn.to_numpy().T @ delta_x_m
-    
-    # Calculate the new equilibrium output for endogenous sectors.
-    # We treat the reduction in available inputs as a negative final demand shock.
-    # This correctly propagates the supply constraint through the endogenous economy.
-    x_n_new_values = endogenous_leontief_inv @ (y_n.to_numpy() + unavailable_inputs)
+    # --- Fixed Calculation for New Endogenous Output (finding A1) ---
+    # The exogenous (shocked) sectors are specified on a *quantity* basis: x_m is fixed
+    # at its new, post-shock level. This is the textbook Miller & Blair "mixed model"
+    # (quantity-type exogenous variables): x_n = (I - A_nn)⁻¹ * (A_nm @ x_m_new + y_n).
+    # A_nm (rows=endogenous suppliers, columns=exogenous/shocked users) gives exactly the
+    # inputs the shocked sectors buy from the rest of the economy, evaluated at their new
+    # (reduced) output level -- this correctly captures the backward-linkage/demand effect
+    # of the shock (shocked sectors buy less from their suppliers because they produce less).
+    #
+    # The previous implementation instead computed a "delta" via A_mn (the *opposite*
+    # direction: inputs shocked sectors used to *supply* to endogenous sectors) and added
+    # it to final demand y_n as a "negative final demand" workaround. That conflated a
+    # forward-linkage/rationing effect (inputs no longer available to customers of the
+    # shocked sector) with demand-side final-demand accounting, and had no theoretical
+    # basis in the Leontief demand-driven framework -- it could also drive outputs
+    # negative for large shocks. A true forward-linkage/rationing effect (what happens
+    # when a customer physically cannot obtain enough input) is a *supply-constrained*
+    # phenomenon, not a demand-driven one; it is properly modeled by the Ghosh model
+    # (`run_physical_risk_ghosh`) and, more rigorously, the `constrained` LP model
+    # (`run_physical_risk_constrained`) below.
+    x_n_new_values = endogenous_leontief_inv @ (y_n.to_numpy() + A_nm.to_numpy() @ x_m_new.to_numpy())
     x_n_new = pd.Series(x_n_new_values, index=endogenous_labels)
 
     # Combine new outputs and calculate the total change in production (Δx)
@@ -68,8 +78,11 @@ def run_physical_risk(A_df, X_df, Y_df, L_df, shock_maps):
     # Reindex x_new to match the original order and structure of X_df.
     # This is crucial to prevent alignment errors during subtraction.
     x_new = x_new.reindex(X_df.index)
+    # Clamp gross output to be non-negative -- a large shock combined with second-order
+    # demand effects should never be able to produce a negative level of production.
+    x_new = x_new.clip(lower=0)
     delta_x = x_new - X_df['GrossOutput']
-    
+
     # Calculate the resulting change in final demand (Δy)
     # Efficiently calculate (I - A) without creating a large identity matrix
     I_minus_A = -A_df.to_numpy()
@@ -120,9 +133,284 @@ def run_physical_risk_ghosh(A_df, X_df, G_df, shock_maps):
 
     # 4. Combine Results and Calculate Change
     x_new = pd.concat([x_n_new, x_m_new]).reindex(X_df.index)
+    # Clamp gross output to be non-negative (finding A1) -- large shocks propagated
+    # through the Ghosh inverse should never be allowed to imply negative production.
+    x_new = x_new.clip(lower=0)
     delta_x = x_new - X_df['GrossOutput']
-    
+
     return None, delta_x # delta_y_req is not relevant for the Ghosh model
+
+def _shock_reachable_subgraph(A_sparse, all_labels, exogenous_labels, max_hops=4, min_weight=1e-9,
+                               max_fraction=0.5, min_absolute_size=500):
+    """
+    Reduce the full sector set to the subgraph reachable from the shocked ("exogenous")
+    sectors within `max_hops` supply-chain hops, i.e. sectors that use -- directly or
+    transitively -- an input from a shocked sector. Solving the constrained LP only over
+    this (typically much smaller) subgraph is what keeps `run_physical_risk_constrained`
+    inside its wall-clock budget on a large MRIO (e.g. the ~8000-sector EXIOBASE system),
+    instead of building an LP over the full system.
+
+    `A_sparse` must be a scipy.sparse matrix (rows=supplying sector, columns=using
+    sector) so the hop expansion never densifies the full system.
+
+    Returns a sorted list of integer positions (into `all_labels`) forming the reduced
+    subgraph, or None if the reduction does not shrink the problem enough to be worth it,
+    signalling "give up, solve/fall back some other way" -- specifically when the reached
+    set exceeds *both* `max_fraction` of all sectors *and* `min_absolute_size` sectors.
+    Requiring both avoids bailing on small systems (e.g. a ~100-sector synthetic test
+    fixture, or a real regional MRIO) where "100% reached" is still a trivially fast LP to
+    solve directly; the fraction alone is only a meaningful "too large" signal once the
+    absolute size is large enough to actually matter for solve time.
+    """
+    n = A_sparse.shape[0]
+    label_to_pos = {label: i for i, label in enumerate(all_labels)}
+    frontier = {label_to_pos[l] for l in exogenous_labels if l in label_to_pos}
+    reached = set(frontier)
+    A_csr = A_sparse.tocsr()
+
+    for _ in range(max_hops):
+        if not frontier:
+            break
+        # Sectors that buy a non-negligible input from any sector in the frontier are
+        # "downstream" of the shock and must be included in the reduced system.
+        sub = A_csr[sorted(frontier), :].tocoo()
+        new_nodes = {c for c, w in zip(sub.col, sub.data) if abs(w) > min_weight} - reached
+        if not new_nodes:
+            break
+        reached |= new_nodes
+        frontier = new_nodes
+        if len(reached) > n * max_fraction and len(reached) > min_absolute_size:
+            return None
+
+    return sorted(reached)
+
+
+def constrained_lp_would_fallback(A_df, shock_maps, max_hops=2, min_weight=5e-3, max_fraction=0.2):
+    """
+    Cheap pre-check for the UI: predicts whether `run_physical_risk_constrained` would
+    have to fall back to the analytical Ghosh model for the given shock, without running
+    the LP solve itself. Only catches the "shock reaches too much of the economy" case
+    (mirrors the `subgraph is None` branch above with the same default params as
+    `run_physical_risk_constrained`); solver time-outs/non-convergence can't be predicted
+    without actually solving, so those are still only caught at run time.
+    """
+    all_labels = A_df.index
+    exogenous_labels = [(shock['region'], shock['sector']) for shock in shock_maps]
+    A_sparse = sp.csr_matrix(A_df.to_numpy())
+    subgraph = _shock_reachable_subgraph(
+        A_sparse, all_labels, exogenous_labels,
+        max_hops=max_hops, min_weight=min_weight, max_fraction=max_fraction,
+    )
+    return subgraph is None
+
+
+def run_physical_risk_constrained(A_df, X_df, Y_df, G_df, shock_maps, time_limit=300, max_hops=2,
+                                   min_weight=5e-3, max_fraction=0.2):
+    """
+    Supply-constrained reallocation model ("rigorous"/constrained mode), in the
+    MRIA / Koks & Thissen linear-programming family. Unlike the fast analytical
+    Leontief/Ghosh models, this explicitly enforces non-negativity and a hard capacity
+    ceiling on the shocked sectors by solving a linear program, so it *cannot* produce a
+    negative or above-baseline-capacity gross output by construction.
+
+    Problem reduction
+    ------------------
+    Sectors outside the shock-reachable subgraph (see `_shock_reachable_subgraph`) are
+    held fixed at their baseline gross output and excluded from the LP's decision
+    variables; only sectors within a few supply-chain hops of the shock are solved for.
+    This keeps the LP small even though the full system (A/X/Y) may have ~8000 sectors.
+
+    Defaults (`max_hops=2`, `min_weight=5e-3`, `max_fraction=0.2`) are calibrated against
+    real EXIOBASE 3 data (2021, ~8000 sectors), not just the small synthetic fixtures used
+    elsewhere in this test suite. A real multi-region economy is densely connected: with
+    the naive "any nonzero technical coefficient counts" threshold, even 2 hops from a
+    single shocked sector reached 100% of all ~8000 sectors, because nearly everything
+    buys *some* infinitesimal amount from nearly everything else (energy, transport,
+    financial services, ...). `min_weight` filters hop-expansion to economically material
+    direct input shares (>=0.5%) so the reduction actually reduces; if it still can't get
+    below `max_fraction` of the system, this function does not attempt the full-system LP
+    (verified too slow -- see below) and instead falls back immediately.
+
+    LP formulation
+    ---------------
+    Let R be the (small) reduced set of sector positions. For i in R:
+
+      Variables:
+        x_i  -- new gross output for sector i
+        s_i  -- unmet final demand / rationing slack (used only if strictly necessary
+                 for feasibility, e.g. a shocked sector's own final demand alone would
+                 exceed its reduced capacity)
+        d_i  -- auxiliary variable for |x_i - x0_i| (linearizes the L1 objective)
+
+      Objective (minimize relative deviation from baseline output; heavily penalize
+      rationing so it is only used when the LP would otherwise be infeasible):
+
+          minimize   sum_i d_i / max(x0_i, eps)   +   BIG_M * sum_i s_i
+
+      Constraints:
+        (1) |x_i - x0_i| <= d_i        <=>   x_i - d_i <= x0_i   and   -x_i - d_i <= -x0_i
+        (2) IO balance with rationing:
+                x_i - sum_{j in R} A[i,j] * x_j + s_i >= y_i + fixed_input_term_i
+            i.e. sector i's own production must cover intermediate demand from its
+            in-subgraph customers plus final demand, net of any rationed/unmet demand.
+            `fixed_input_term_i = sum_{j not in R} A[i,j] * x0_j` accounts for demand
+            from sectors held fixed outside the reduced subgraph. This constraint is
+            what forces *downstream* sectors to shrink output when they can no longer
+            source enough input from a shocked upstream sector -- the genuine supply
+            constraint that the old A1 "negative final demand" heuristic tried (and
+            failed) to approximate.
+        (3) Capacity bounds: 0 <= x_i <= cap_i, where cap_i = x0_i * (1 - magnitude) for
+            shocked sectors and cap_i = x0_i for all other sectors in R (no sector can
+            expand past baseline output in this short-run model).
+        (4) 0 <= s_i <= max(y_i, 0)
+
+    Solver & time budget
+    ----------------------
+    scipy.optimize.linprog(method="highs") with all constraint matrices built as
+    scipy.sparse matrices restricted to the (already-reduced) subgraph -- the LP itself
+    is only ever sized to the reduced subgraph, never the full n x n system. (Building
+    the adjacency-lookup sparse matrix from A_df does pass through a dense
+    `.to_numpy()` once; on the real ~8000-sector EXIOBASE table this took ~5s, which is
+    included in the time budget below.) A hard wall-clock budget is enforced both by
+    HiGHS's own `time_limit` option and an outer timer; if the solve does not finish
+    with an optimal status inside the budget, this function falls back to the fast
+    analytical Ghosh model and returns a warning string instead of a partial/unreliable
+    LP solution.
+
+    On the real 2021 EXIOBASE data, a materially-sized cross-country shock (US
+    agriculture -> CN manufacturing) reduces to a several-hundred-sector subgraph and
+    solves in under 2 seconds end-to-end with these defaults -- comfortably inside the
+    5-minute budget. (Before two bugs found via this real-data testing were fixed, the
+    same shock either solved the full ~8000-sector system directly, at ~74s, or hit a
+    BIG_M-driven numerical-conditioning failure at a few hundred to a few thousand
+    sectors; see the BIG_M comment below and the `subgraph is None` early-fallback
+    above.)
+
+    Returns
+    -------
+    (warning, delta_x): `warning` is None when the LP solved successfully, otherwise a
+    human-readable string describing why the analytical fallback was used.
+    """
+    start_time = time.time()
+
+    all_labels = A_df.index
+    exogenous_labels = [(shock['region'], shock['sector']) for shock in shock_maps]
+    shock_lookup = {label: shock['magnitude'] for label, shock in zip(exogenous_labels, shock_maps)}
+
+    def _fallback(reason):
+        warning = (
+            f"Constrained LP solver {reason} (budget {time_limit}s); falling back to the "
+            "analytical Ghosh supply-side model. Results reflect the fallback model, not "
+            "the constrained LP."
+        )
+        _, delta_x_fallback = run_physical_risk_ghosh(A_df, X_df, G_df, shock_maps)
+        return warning, delta_x_fallback
+
+    try:
+        n = len(all_labels)
+        x0 = X_df['GrossOutput'].to_numpy()
+        y = Y_df['FinalDemand'].to_numpy()
+        A_sparse = sp.csr_matrix(A_df.to_numpy())
+
+        subgraph = _shock_reachable_subgraph(
+            A_sparse, all_labels, exogenous_labels,
+            max_hops=max_hops, min_weight=min_weight, max_fraction=max_fraction,
+        )
+        if subgraph is None:
+            # The shock reaches more than max_fraction of all sectors -- real,
+            # densely-connected economies (verified on full EXIOBASE) routinely reach
+            # 100% of sectors within 2-4 hops once every nonzero technical coefficient
+            # counts, so this is not a rare edge case. Solving the full ~8000-sector
+            # system as an LP is neither fast (it blew the time budget in testing) nor
+            # numerically safe, so don't attempt it -- go straight to the fast,
+            # unconditionally-safe analytical fallback instead of gambling a slow solve.
+            return _fallback(f"would require solving over {n} sectors (no reduction possible)")
+        R_positions = subgraph
+        R_set = set(R_positions)
+        F_positions = [p for p in range(n) if p not in R_set]
+        n_R = len(R_positions)
+
+        x0_R = x0[R_positions]
+        y_R = y[R_positions]
+        eps = 1e-6
+
+        # Capacity ceiling: baseline output for all sectors in R, reduced for shocked ones.
+        cap_R = x0_R.copy()
+        for idx, pos in enumerate(R_positions):
+            label = all_labels[pos]
+            if label in shock_lookup:
+                cap_R[idx] = max(0.0, x0_R[idx] * (1.0 - shock_lookup[label]))
+
+        # Demand placed on R-sectors by sectors held fixed outside the subgraph.
+        A_RR = A_sparse[R_positions, :][:, R_positions].tocsr()
+        if F_positions:
+            A_RF = A_sparse[R_positions, :][:, F_positions].tocsr()
+            fixed_input_term = np.asarray(A_RF @ x0[F_positions]).ravel()
+        else:
+            fixed_input_term = np.zeros(n_R)
+
+        weight_R = 1.0 / np.maximum(x0_R, eps)
+        # BIG_M must dominate the maximum possible L1-deviation objective contribution
+        # so rationing (s_i) is only ever used when strictly necessary for feasibility.
+        # Each term weight_R[i]*d_i is bounded by ~1 (d_i <= x0_i and weight_R[i] = 1/x0_i),
+        # so a bound proportional to the number of sectors is enough. The previous
+        # `1e6 * max(weight_R)` scaled off the single smallest-output sector in R: on real
+        # EXIOBASE data a near-zero-output outlier pushed weight_R.max() to ~1.9e4, making
+        # BIG_M ~1.9e10 -- combined with the smallest LP coefficients (~1e-6), the
+        # constraint matrix's dynamic range exceeded double-precision's ~1e16 limit and
+        # HiGHS failed immediately with "numerical difficulties" (status 4, nit=0) well
+        # inside the time budget. Confirmed fixed on the same real data (688-sector
+        # subgraph: failed -> converges in ~2s) by scaling with n_R instead.
+        BIG_M = 1e3 * max(n_R, 1)
+
+        # --- Objective: c^T @ [x, s, d] ---
+        c = np.concatenate([np.zeros(n_R), np.full(n_R, BIG_M), weight_R])
+
+        I_R = sp.identity(n_R, format='csr')
+        Z_R = sp.csr_matrix((n_R, n_R))
+
+        # (1a) x_i - d_i <= x0_i
+        row_d1 = sp.hstack([I_R, Z_R, -I_R], format='csr')
+        b_d1 = x0_R
+        # (1b) -x_i - d_i <= -x0_i
+        row_d2 = sp.hstack([-I_R, Z_R, -I_R], format='csr')
+        b_d2 = -x0_R
+        # (2) -x_i + sum_j A_RR[i,j] x_j - s_i <= -(y_i + fixed_input_term_i)
+        row_bal = sp.hstack([A_RR - I_R, -I_R, Z_R], format='csr')
+        b_bal = -(y_R + fixed_input_term)
+
+        A_ub = sp.vstack([row_bal, row_d1, row_d2], format='csr')
+        b_ub = np.concatenate([b_bal, b_d1, b_d2])
+
+        bounds = (
+            [(0, cap_R[i]) for i in range(n_R)]
+            + [(0, max(y_R[i], 0.0)) for i in range(n_R)]
+            + [(0, None) for _ in range(n_R)]
+        )
+
+        remaining = max(1.0, time_limit - (time.time() - start_time))
+        res = linprog(
+            c=c, A_ub=A_ub, b_ub=b_ub, bounds=bounds,
+            method='highs', options={'time_limit': remaining}
+        )
+
+        elapsed = time.time() - start_time
+        if elapsed > time_limit or not res.success:
+            reason = "exceeded its time budget" if elapsed > time_limit else f"failed to converge ({res.message})"
+            return _fallback(reason)
+
+        x_R_solution = np.clip(res.x[:n_R], 0.0, None)
+
+        x_new = x0.copy()
+        x_new[R_positions] = x_R_solution
+        x_new = pd.Series(x_new, index=all_labels, name='GrossOutput')
+        delta_x = x_new - X_df['GrossOutput']
+
+        return None, delta_x
+
+    except Exception as exc:  # pragma: no cover - defensive fallback for any solver failure
+        return _fallback(f"raised an error ({exc})")
+
 
 def run_transition_risk(shock_map):
     """
@@ -181,6 +469,14 @@ def attribute_output_change(model_method, delta_x, shock_maps, home_region, home
     if model_method == 'leontief' and L_df is not None:
         # Leontief: L_ij shows how much output from i is needed for 1 unit of final demand in j.
         # The contribution of a shock in sector i to sector j is L_ji * delta_x_i.
+        # NOTE: this is a *backward-linkage* (demand-side) attribution and is
+        # consistent with the demand-driven delta_x. It can legitimately be ~0
+        # when the shocked sector is *upstream* of home (home does not supply the
+        # shocked sector), which is not a bug — that upstream/forward "my supplier
+        # failed" effect is a supply-side phenomenon captured by the Ghosh branch
+        # below. Verified on a full multi-region MRIO (pymrio.load_test) where
+        # Leontief attribution is non-zero and matches |delta_x[home]|; the
+        # earlier zero seen on the degenerate 2x2 dummy was a topology artifact.
         for shock_label, shock_value in initial_shocks.items():
             contribution = L_df.loc[home_label, shock_label] * shock_value
             impact_causes[f"{shock_label[0]} - {shock_label[1]}"] = contribution
@@ -202,13 +498,17 @@ def attribute_output_change(model_method, delta_x, shock_maps, home_region, home
 
     # Normalize the external causes to sum to 100%
     total_attributed_external = sum(external_causes.values())
+    sorted_external_causes = sorted(external_causes.items(), key=lambda item: item[1], reverse=True)
     attribution = {
         'total_impact': total_impact,
         'causes': {label: (impact / total_attributed_external) * 100 if total_attributed_external > 0 else 0
-                   for label, impact in sorted(external_causes.items(), key=lambda item: item[1], reverse=True)},
+                   for label, impact in sorted_external_causes},
+        # Absolute (non-renormalized) contributions, in the same units as delta_x, so the
+        # true magnitude of each cause is still visible alongside the normalized percentages above.
+        'causes_absolute': {label: impact for label, impact in sorted_external_causes},
         'message': f'Change in Gross Output for {home_sector}'
     }
-    
+
     return attribution
 
 def attribute_portfolio_change(model_method, delta_x, shock_maps, portfolio_data, L_df=None, G_df=None, A_df=None):
@@ -252,10 +552,13 @@ def attribute_portfolio_change(model_method, delta_x, shock_maps, portfolio_data
 
     # Normalize to 100%
     total_attributed = sum(portfolio_causes.values())
+    sorted_portfolio_causes = sorted(portfolio_causes.items(), key=lambda item: item[1], reverse=True)
     attribution = {
         'total_impact': total_portfolio_impact,
         'causes': {label: (impact / total_attributed) * 100 if total_attributed > 0 else 0
-                   for label, impact in sorted(portfolio_causes.items(), key=lambda item: item[1], reverse=True)},
+                   for label, impact in sorted_portfolio_causes},
+        # Absolute (non-renormalized) contributions, in the same units as delta_x.
+        'causes_absolute': {label: impact for label, impact in sorted_portfolio_causes},
         'message': 'Change in Total Portfolio Value'
     }
     return attribution

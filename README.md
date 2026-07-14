@@ -44,37 +44,60 @@ cd vesdio
 This command will create a new environment named `vesdio` with the necessary Python version and activate it. Using Mamba is strongly advised to ensure correct installation of complex data science libraries.
 ```bash
 # We recommend using Mamba for a faster and more reliable installation
-mamba create -n vesdio python=3.9 -c conda-forge --yes
+mamba create -n vesdio python=3.11 -c conda-forge --yes
 mamba activate vesdio
 ```
+Python 3.11 is confirmed working. (`requirements.txt` doesn't pin a version, but 3.9 pulls in an older `pymrio` that breaks the test suite — see Step 3.)
 
 **Step 3: Install Dependencies**
-Install all required Python packages into the active environment using the `requirements.txt` file.
+Most packages in `requirements.txt` are available on conda-forge, but `pywebview` is not (it's PyPI-only), so install it separately with pip:
 ```bash
-mamba install --file requirements.txt --yes
+# Everything except pywebview, via conda-forge
+grep -v pywebview requirements.txt > /tmp/req_conda.txt
+mamba install -n vesdio --file /tmp/req_conda.txt -c conda-forge --yes
+
+# pywebview, via pip
+mamba run -n vesdio pip install pywebview
 ```
-
-**Step 4: Data Ingestion**
-The application requires external datasets (EXIOBASE and ENCORE) to function. The following scripts will download and process this data.
-
-**Important:** This is a one-time setup process that can be time-consuming and require significant disk space. The scripts are configured via environment variables (e.g., in a `.env` file) to specify the years of data to ingest. 
-
-In `.env`, specify the absolute path of where you want the data files to go in your system using the variable `DATA_DIR`. For example, if you want the data files to go into `C:/Documents/vesdio`, modify the `.env` file to the following:
-
-```
-DATA_DIR=C:/Documents/vesdio
-```
-
-Afterwards, run the data ingestion script in Python to ingest the EXIOBASE and ENCORE files needed.
-
+`conda-forge`'s `pymrio` build (0.4.8) is missing the `include_ghosh` argument on `calc_all()` that the test suite in `tests/test_load_test_mrio.py` relies on. Upgrade it via pip to the latest release to fix this:
 ```bash
-python ingest_exiobase.py
-python ingest_encore.py
+mamba run -n vesdio pip install -U pymrio
 ```
 
-**Step 5: Run the Application**
+**Step 4: Configure `.env`**
+Create a `.env` file in the project root specifying where data files should live:
+```
+DATA_DIR=./data
+```
+(Use an absolute path if you prefer, e.g. `DATA_DIR=C:/Documents/vesdio` on Windows.)
+
+**Step 5: Get Data**
+The full app needs the real EXIOBASE and ENCORE datasets, which are large and slow to ingest. For local development you have two options:
+
+- **Quick start (recommended for dev work):** generate a small synthetic dataset so you can run the app and test suite immediately, without downloading anything:
+  ```bash
+  mamba run -n vesdio python create_dummy_data.py
+  ```
+  This writes a 2-country/2-sector dummy MRIO to `DATA_DIR`.
+
+- **Full dataset:** to work with real EXIOBASE/ENCORE data, run the ingestion scripts. This is a one-time, potentially time-consuming step that requires significant disk space and downloads. `YEAR_START`/`YEAR_END` (both default to `2021`) can also be set in `.env` to control which EXIOBASE years are ingested.
+  ```bash
+  mamba run -n vesdio python ingest_exiobase.py
+  mamba run -n vesdio python ingest_encore.py
+  ```
+  `ingest_encore.py` additionally expects an ENCORE knowledge-base export folder (named like `Updated ENCORE knowledge base <Month Year>`) to already exist under `DATA_DIR/ENCORE_data/` — download it from [encorenature.org](https://encorenature.org/en) and place it there before running.
+
+**Step 6: Run the Tests**
+Verify the environment is set up correctly:
+```bash
+mamba run -n vesdio python -m pytest -q
+```
+All tests should pass (61 passed as of this writing) once dummy or real data is in place and `pymrio` has been upgraded per Step 3.
+
+**Step 7: Run the Application**
 Once the setup is complete, you can start the Dash web application.
 ```bash
+mamba activate vesdio
 python app.py
 ```
 Open your web browser and navigate to `http://127.0.0.1:8050` to use the tool.
