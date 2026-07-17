@@ -1,0 +1,52 @@
+name: Deploy landing page to GitHub Pages
+
+# Publishes the static site in website/ to GitHub Pages at vesd.io.
+#
+# ONE-TIME OWNER SETUP REQUIRED before this workflow will actually publish
+# anything:
+#   1. Repo Settings -> Pages -> Source: set to "GitHub Actions" (not a
+#      branch). Until this is done, this workflow will run but Pages won't
+#      serve the result.
+#   2. Repo Settings -> Pages -> Custom domain: enter `vesd.io` (matches
+#      website/CNAME) and enable "Enforce HTTPS" once DNS has propagated.
+#   3. Namecheap DNS for vesd.io: A records for the apex (@) pointing at
+#      GitHub's four Pages IPs (185.199.108.153 / .109.153 / .110.153 /
+#      .111.153, plus the matching AAAA records), and a CNAME for `www`
+#      pointing at frankiecho.github.io.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'website/**'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload website/ as the Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: website
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

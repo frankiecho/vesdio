@@ -1,0 +1,738 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VESDIO — Valuing Ecosystem Services Dependencies with Input-Output modeling</title>
+<meta name="description" content="VESDIO is an experimental desktop tool for scenario analysis of how ecosystem services disruption propagates through global supply chains into your business or portfolio.">
+<link rel="icon" type="image/png" sizes="32x32" href="assets/favicon-32x32.png">
+<link rel="icon" type="image/png" sizes="16x16" href="assets/favicon-16x16.png">
+<link rel="shortcut icon" href="assets/favicon.ico">
+<style>
+/* ---------------------------------------------------------------------
+ * Design tokens — mirrored 1:1 from assets/design-system.css /
+ * src/design_tokens.py. Do not alter the brand hexes.
+ * ------------------------------------------------------------------- */
+:root {
+  --color-blue: #0072B2;
+  --color-red: #D55E00;
+  --color-amber: #E69F00;
+  --color-beige: #F0E442;
+  --color-green: #009E73;
+  --color-grey: #999999;
+
+  --color-accent: #0072B2;
+  --color-negative: #D55E00;
+  --color-positive: #009E73;
+  --color-warning: #E69F00;
+  --color-highlight: #F0E442;
+  --color-neutral: #999999;
+
+  --color-grey-100: #F7F7F7;
+  --color-grey-200: #EEEEEE;
+  --color-grey-300: #E0E0E0;
+  --color-grey-400: #CCCCCC;
+  --color-grey-500: #999999;
+  --color-grey-600: #757575;
+  --color-grey-700: #555555;
+  --color-grey-800: #333333;
+  --color-grey-900: #1A1A1A;
+
+  --color-bg: #FFFFFF;
+  --color-bg-subtle: var(--color-grey-100);
+  --color-surface: #FFFFFF;
+  --color-surface-raised: #FFFFFF;
+  --color-border: var(--color-grey-300);
+  --color-border-strong: var(--color-grey-400);
+  --color-text: var(--color-grey-900);
+  --color-text-muted: var(--color-grey-700);
+  --color-text-on-accent: #FFFFFF;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+  --space-16: 64px;
+
+  --font-family-base: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-family-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  --font-size-xs: 0.75rem;
+  --font-size-sm: 0.875rem;
+  --font-size-base: 1rem;
+  --font-size-md: 1.125rem;
+  --font-size-lg: 1.25rem;
+  --font-size-xl: 1.5rem;
+  --font-size-2xl: 1.875rem;
+  --font-size-3xl: 2.25rem;
+
+  --font-weight-normal: 400;
+  --font-weight-medium: 500;
+  --font-weight-bold: 700;
+
+  --line-height-tight: 1.2;
+  --line-height-normal: 1.5;
+  --line-height-relaxed: 1.75;
+
+  --radius-sm: 2px;
+  --radius-md: 4px;
+  --radius-lg: 8px;
+  --radius-xl: 16px;
+  --radius-full: 9999px;
+
+  --shadow-sm: 0 1px 2px rgba(26, 26, 26, 0.08);
+  --shadow-md: 0 2px 8px rgba(26, 26, 26, 0.12);
+  --shadow-lg: 0 8px 24px rgba(26, 26, 26, 0.16);
+  --shadow-xl: 0 16px 48px rgba(26, 26, 26, 0.20);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-bg: var(--color-grey-900);
+    --color-bg-subtle: #141414;
+    --color-surface: #232323;
+    --color-surface-raised: #2B2B2B;
+    --color-border: var(--color-grey-700);
+    --color-border-strong: var(--color-grey-600);
+    --color-text: var(--color-grey-100);
+    --color-text-muted: var(--color-grey-400);
+    --color-text-on-accent: #FFFFFF;
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.40);
+    --shadow-md: 0 2px 8px rgba(0, 0, 0, 0.45);
+    --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.50);
+    --shadow-xl: 0 16px 48px rgba(0, 0, 0, 0.55);
+  }
+}
+:root[data-theme="dark"] {
+  --color-bg: var(--color-grey-900);
+  --color-bg-subtle: #141414;
+  --color-surface: #232323;
+  --color-surface-raised: #2B2B2B;
+  --color-border: var(--color-grey-700);
+  --color-border-strong: var(--color-grey-600);
+  --color-text: var(--color-grey-100);
+  --color-text-muted: var(--color-grey-400);
+  --color-text-on-accent: #FFFFFF;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.40);
+  --shadow-md: 0 2px 8px rgba(0, 0, 0, 0.45);
+  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.50);
+  --shadow-xl: 0 16px 48px rgba(0, 0, 0, 0.55);
+}
+:root[data-theme="light"] {
+  --color-bg: #FFFFFF;
+  --color-bg-subtle: var(--color-grey-100);
+  --color-surface: #FFFFFF;
+  --color-surface-raised: #FFFFFF;
+  --color-border: var(--color-grey-300);
+  --color-border-strong: var(--color-grey-400);
+  --color-text: var(--color-grey-900);
+  --color-text-muted: var(--color-grey-700);
+  --color-text-on-accent: #FFFFFF;
+  --shadow-sm: 0 1px 2px rgba(26, 26, 26, 0.08);
+  --shadow-md: 0 2px 8px rgba(26, 26, 26, 0.12);
+  --shadow-lg: 0 8px 24px rgba(26, 26, 26, 0.16);
+  --shadow-xl: 0 16px 48px rgba(26, 26, 26, 0.20);
+}
+
+* { box-sizing: border-box; }
+html, body {
+  margin: 0;
+  padding: 0;
+  max-width: 100%;
+  overflow-x: hidden;
+}
+body {
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-family: var(--font-family-base);
+  font-size: var(--font-size-base);
+  line-height: var(--line-height-normal);
+}
+img { max-width: 100%; display: block; }
+a { color: var(--color-accent); }
+.container {
+  max-width: 1080px;
+  margin: 0 auto;
+  padding: 0 var(--space-6);
+}
+
+/* --- Top bar --- */
+.top-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-4) var(--space-6);
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-bg-subtle);
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+.top-bar-brand { display: flex; align-items: center; gap: var(--space-3); }
+.top-bar-brand img { height: 36px; width: 36px; }
+.top-bar-brand span { font-weight: var(--font-weight-bold); font-size: var(--font-size-lg); }
+.top-bar-links { display: flex; align-items: center; gap: var(--space-4); }
+.top-bar-links a { text-decoration: none; font-weight: var(--font-weight-medium); font-size: var(--font-size-sm); }
+
+.theme-toggle {
+  border: 1px solid var(--color-border-strong);
+  background: var(--color-surface);
+  color: var(--color-text);
+  border-radius: var(--radius-full);
+  width: 36px;
+  height: 36px;
+  cursor: pointer;
+  font-size: var(--font-size-md);
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.theme-toggle:hover { box-shadow: var(--shadow-sm); }
+
+/* --- Hero --- */
+.hero {
+  text-align: center;
+  padding: var(--space-16) var(--space-6) var(--space-12);
+}
+.hero img.logo { height: 96px; width: 96px; margin: 0 auto var(--space-4); }
+.hero h1 {
+  font-size: var(--font-size-3xl);
+  margin: 0 0 var(--space-3);
+  letter-spacing: 0.02em;
+}
+.hero .tagline {
+  font-size: var(--font-size-lg);
+  max-width: 700px;
+  margin: 0 auto var(--space-3);
+  color: var(--color-text);
+  font-weight: var(--font-weight-medium);
+}
+.hero .subtitle {
+  font-size: var(--font-size-base);
+  max-width: 640px;
+  margin: 0 auto var(--space-8);
+  color: var(--color-text-muted);
+}
+.hero-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-4);
+  justify-content: center;
+  align-items: center;
+}
+
+/* --- Buttons --- */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-6);
+  border-radius: var(--radius-md);
+  font-weight: var(--font-weight-bold);
+  text-decoration: none;
+  font-size: var(--font-size-base);
+  border: 1px solid transparent;
+  cursor: pointer;
+}
+.btn-primary {
+  background: var(--color-accent);
+  color: var(--color-text-on-accent);
+  box-shadow: var(--shadow-sm);
+}
+.btn-primary:hover { box-shadow: var(--shadow-md); }
+.btn-secondary {
+  background: transparent;
+  color: var(--color-text);
+  border-color: var(--color-border-strong);
+}
+.btn-secondary:hover { box-shadow: var(--shadow-sm); }
+
+/* --- Sections --- */
+section {
+  padding: var(--space-12) 0;
+  border-top: 1px solid var(--color-border);
+}
+section > .container > h2 {
+  font-size: var(--font-size-2xl);
+  margin: 0 0 var(--space-2);
+  text-align: center;
+}
+section > .container > p.section-lede {
+  text-align: center;
+  color: var(--color-text-muted);
+  max-width: 640px;
+  margin: 0 auto var(--space-8);
+}
+
+/* --- Downloads --- */
+.download-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--space-5);
+  margin-bottom: var(--space-5);
+}
+@media (max-width: 720px) {
+  .download-grid { grid-template-columns: 1fr; }
+}
+.download-card {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-6);
+  text-align: center;
+  background: var(--color-surface);
+  box-shadow: var(--shadow-sm);
+}
+.download-card .os-icon { font-size: var(--font-size-3xl); margin-bottom: var(--space-2); }
+.download-card h3 { margin: 0 0 var(--space-3); font-size: var(--font-size-md); }
+.download-note {
+  text-align: center;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+  max-width: 560px;
+  margin: 0 auto;
+}
+
+/* --- Feature grid --- */
+.feature-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--space-5);
+}
+@media (max-width: 900px) {
+  .feature-grid { grid-template-columns: repeat(2, 1fr); }
+}
+@media (max-width: 600px) {
+  .feature-grid { grid-template-columns: 1fr; }
+}
+.feature-card {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-5);
+  background: var(--color-surface);
+}
+.feature-card .badge {
+  display: inline-block;
+  width: 28px;
+  height: 28px;
+  line-height: 28px;
+  text-align: center;
+  border-radius: var(--radius-full);
+  background: var(--color-accent);
+  color: var(--color-text-on-accent);
+  font-weight: var(--font-weight-bold);
+  font-size: var(--font-size-sm);
+  margin-bottom: var(--space-3);
+}
+.feature-card.accent-green .badge { background: var(--color-green); }
+.feature-card.accent-red .badge { background: var(--color-red); }
+.feature-card.accent-amber .badge { background: var(--color-amber); color: var(--color-grey-900); }
+.feature-card h3 { margin: 0 0 var(--space-2); font-size: var(--font-size-md); }
+.feature-card p { margin: 0; color: var(--color-text-muted); font-size: var(--font-size-sm); }
+
+.feature-subhead {
+  font-size: var(--font-size-lg);
+  margin: var(--space-10) 0 var(--space-4);
+  text-align: center;
+}
+.feature-subhead:first-child { margin-top: 0; }
+
+/* --- Screenshot gallery --- */
+.gallery {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: var(--space-6);
+}
+@media (max-width: 720px) {
+  .gallery { grid-template-columns: 1fr; }
+}
+figure.shot {
+  margin: 0;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  background: var(--color-surface);
+  box-shadow: var(--shadow-sm);
+}
+figure.shot img {
+  width: 100%;
+  height: auto;
+  display: block;
+  border-bottom: 1px solid var(--color-border);
+}
+figure.shot figcaption {
+  padding: var(--space-3) var(--space-4);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+}
+.gallery-note {
+  text-align: center;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+  margin-top: var(--space-5);
+}
+
+/* --- Methodology --- */
+.method-steps {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: var(--space-4);
+  counter-reset: step;
+  margin-bottom: var(--space-6);
+}
+@media (max-width: 900px) {
+  .method-steps { grid-template-columns: repeat(2, 1fr); }
+}
+@media (max-width: 560px) {
+  .method-steps { grid-template-columns: 1fr; }
+}
+.method-step {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-4);
+  background: var(--color-surface);
+  font-size: var(--font-size-sm);
+}
+.method-step strong { display: block; margin-bottom: var(--space-1); color: var(--color-accent); }
+
+/* --- Limitations callout --- */
+.limitations {
+  border: 2px solid var(--color-warning);
+  background: color-mix(in srgb, var(--color-warning) 10%, var(--color-bg-subtle));
+  border-radius: var(--radius-lg);
+  padding: var(--space-6) var(--space-8);
+}
+.limitations h2 {
+  color: var(--color-warning);
+  margin-top: 0;
+  text-align: left !important;
+}
+.limitations ul { padding-left: var(--space-6); margin: var(--space-4) 0; }
+.limitations li { margin-bottom: var(--space-2); }
+.limitations .callout-lead {
+  font-weight: var(--font-weight-bold);
+  margin-bottom: var(--space-3);
+}
+
+/* --- Footer --- */
+footer {
+  border-top: 1px solid var(--color-border);
+  padding: var(--space-10) 0 var(--space-12);
+  background: var(--color-bg-subtle);
+}
+footer .footer-grid {
+  display: grid;
+  grid-template-columns: 2fr 1fr;
+  gap: var(--space-8);
+}
+@media (max-width: 720px) {
+  footer .footer-grid { grid-template-columns: 1fr; }
+}
+footer h4 { margin: 0 0 var(--space-2); font-size: var(--font-size-sm); text-transform: uppercase; letter-spacing: 0.04em; color: var(--color-text-muted); }
+footer p, footer li { font-size: var(--font-size-sm); color: var(--color-text-muted); }
+footer ul { list-style: none; padding: 0; margin: 0; }
+footer li { margin-bottom: var(--space-2); }
+footer .ai-declaration {
+  margin-top: var(--space-6);
+  padding-top: var(--space-6);
+  border-top: 1px solid var(--color-border);
+  font-size: var(--font-size-xs);
+}
+</style>
+</head>
+<body>
+
+<header class="top-bar">
+  <div class="top-bar-brand">
+    <img src="assets/ms-icon-310x310.png" alt="VESDIO logo">
+    <span>VESDIO</span>
+  </div>
+  <div class="top-bar-links">
+    <a href="https://github.com/frankiecho/vesdio" target="_blank" rel="noopener">GitHub</a>
+    <button class="theme-toggle" id="theme-toggle" aria-label="Toggle dark mode" title="Toggle dark mode">◐</button>
+  </div>
+</header>
+
+<section class="hero" style="border-top: none; padding-top: var(--space-16);">
+  <div class="container">
+    <img class="logo" src="assets/ms-icon-310x310.png" alt="VESDIO logo — a stylised globe with a supply-chain leaf motif">
+    <h1>VESDIO</h1>
+    <p class="tagline">Valuing Ecosystem Services Dependencies with Input-Output modeling.</p>
+    <p class="subtitle">
+      An experimental desktop tool for scenario ("what if") analysis of how ecosystem
+      services disruption — water stress, pollination decline, and more — propagates
+      through global supply chains to affect production in your business sector,
+      region, or investment portfolio. Built to support TNFD-style nature-dependency
+      disclosures with a concrete, quantitative starting point.
+    </p>
+    <div class="hero-actions">
+      <a class="btn btn-primary" id="primary-download" href="https://github.com/frankiecho/vesdio/releases/latest" target="_blank" rel="noopener">
+        ⬇ Download for <span id="primary-os">your OS</span>
+      </a>
+      <a class="btn btn-secondary" href="https://github.com/frankiecho/vesdio" target="_blank" rel="noopener">View on GitHub</a>
+    </div>
+  </div>
+</section>
+
+<section id="downloads">
+  <div class="container">
+    <h2>Download</h2>
+    <p class="section-lede">Free, per-OS executables built automatically from the source repository.</p>
+    <div class="download-grid">
+      <div class="download-card">
+        <div class="os-icon">🪟</div>
+        <h3>Windows</h3>
+        <a class="btn btn-secondary" href="https://github.com/frankiecho/vesdio/releases/latest" target="_blank" rel="noopener">Download .zip</a>
+      </div>
+      <div class="download-card">
+        <div class="os-icon">🍎</div>
+        <h3>macOS</h3>
+        <a class="btn btn-secondary" href="https://github.com/frankiecho/vesdio/releases/latest" target="_blank" rel="noopener">Download .zip</a>
+      </div>
+      <div class="download-card">
+        <div class="os-icon">🐧</div>
+        <h3>Linux</h3>
+        <a class="btn btn-secondary" href="https://github.com/frankiecho/vesdio/releases/latest" target="_blank" rel="noopener">Download .zip</a>
+      </div>
+    </div>
+    <p class="download-note">
+      Each download links to the latest GitHub release. The executable itself is
+      small — it does not bundle the EXIOBASE dataset. <strong>First launch
+      downloads the reference dataset (~300–500 MB) automatically</strong> into a
+      per-user data folder, verified by checksum; after that it runs fully offline.
+      If the download can't complete, the app still starts using a small synthetic
+      dataset so it's never left broken.
+    </p>
+  </div>
+</section>
+
+<section id="features">
+  <div class="container">
+    <h2>Features</h2>
+    <p class="section-lede">A guided three-step wizard on the left, rich results on the right.</p>
+
+    <h3 class="feature-subhead">The wizard</h3>
+    <div class="feature-grid">
+      <div class="feature-card">
+        <div class="badge">1</div>
+        <h3>Position</h3>
+        <p>Tell VESDIO who you are: a single asset (a region + sector, e.g. car manufacturing in Germany) or a diversified portfolio of multiple region/sector assets weighted up to 100%.</p>
+      </div>
+      <div class="feature-card">
+        <div class="badge">2</div>
+        <h3>Shock</h3>
+        <p>Define what happens: an ecosystem-service shock (e.g. water stress, pollination decline) mapped via ENCORE to affected sectors, a specific sector-region shock, or a custom multi-shock scenario.</p>
+      </div>
+      <div class="feature-card">
+        <div class="badge">3</div>
+        <h3>Configure</h3>
+        <p>Choose the reference year and the simulation method — Leontief (demand-side) or Ghosh (supply-side) — then run the simulation.</p>
+      </div>
+    </div>
+
+    <h3 class="feature-subhead">Result views</h3>
+    <div class="feature-grid">
+      <div class="feature-card">
+        <h3>Summary</h3>
+        <p>Before/after output bars and a waterfall chart showing which upstream regions and sectors drove the change.</p>
+      </div>
+      <div class="feature-card">
+        <h3>Geographic Impact</h3>
+        <p>A map view of where the impact on your position is concentrated globally.</p>
+      </div>
+      <div class="feature-card">
+        <h3>Supply Chain Flow</h3>
+        <p>A Sankey diagram tracing how the shock flows through intermediate sectors and regions to reach you.</p>
+      </div>
+      <div class="feature-card">
+        <h3>Global Impacts</h3>
+        <p>A sortable table ranking every affected sector-region by relative or absolute output change.</p>
+      </div>
+      <div class="feature-card">
+        <h3>Historical Context</h3>
+        <p>Compares your scenario's magnitude against historical production trends for the affected sector, where data is available.</p>
+      </div>
+      <div class="feature-card">
+        <h3>Portfolio Breakdown</h3>
+        <p>In portfolio mode, a per-asset breakdown plus the aggregated, weighted impact on the whole portfolio.</p>
+      </div>
+    </div>
+
+    <h3 class="feature-subhead">Scenario Builder &amp; portfolios</h3>
+    <div class="feature-grid">
+      <div class="feature-card accent-green">
+        <div class="badge">✎</div>
+        <h3>Scenario Builder</h3>
+        <p>Combine multiple shocks across different region-sector pairs in a single run — e.g. a fruit &amp; vegetable cultivation shock in the EU plus a hydropower shock in China, simultaneously.</p>
+      </div>
+      <div class="feature-card accent-green">
+        <div class="badge">⇅</div>
+        <h3>YAML import / export</h3>
+        <p>Save a scenario or portfolio to a YAML file and reload it later, or share it with a colleague, without re-clicking through the wizard.</p>
+      </div>
+      <div class="feature-card accent-green">
+        <div class="badge">◫</div>
+        <h3>Portfolio mode</h3>
+        <p>Build an internationally diversified portfolio from multiple region/sector assets and see the cumulative, weighted impact of a shock across all of them.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="screenshots">
+  <div class="container">
+    <h2>Screenshots</h2>
+    <p class="section-lede">Captured against the app's built-in synthetic dummy dataset (a 2-country, 2-sector economy) — see the caption on each for what it shows.</p>
+    <div class="gallery">
+      <figure class="shot">
+        <img src="assets/screenshots/summary.png" alt="Summary tab showing a before/after output bar chart and a waterfall chart breaking down the drivers of a -3.19% output change">
+        <figcaption>Summary — before/after output and a waterfall of top contributing regions.</figcaption>
+      </figure>
+      <figure class="shot">
+        <img src="assets/screenshots/supply-chain.png" alt="Supply Chain Flow tab showing a Sankey diagram tracing the shock from two upstream sector-region nodes through an intermediate node to the affected asset">
+        <figcaption>Supply Chain Flow — a Sankey diagram of how the shock propagates.</figcaption>
+      </figure>
+      <figure class="shot">
+        <img src="assets/screenshots/global.png" alt="Global Impacts tab showing a sortable table ranking affected country-sector combinations by output change">
+        <figcaption>Global Impacts — every affected sector-region, ranked and sortable.</figcaption>
+      </figure>
+      <figure class="shot">
+        <img src="assets/screenshots/portfolio.png" alt="Portfolio Breakdown tab showing a two-asset portfolio's individual and aggregated output impacts">
+        <figcaption>Portfolio Breakdown — per-asset and total weighted portfolio impact.</figcaption>
+      </figure>
+      <figure class="shot">
+        <img src="assets/screenshots/scenario-builder.png" alt="Scenario Builder modal for configuring and reviewing a custom multi-shock scenario, with YAML import/export buttons">
+        <figcaption>Scenario Builder — combine multiple shocks and import/export as YAML.</figcaption>
+      </figure>
+      <figure class="shot">
+        <img src="assets/screenshots/historical.png" alt="Historical Context tab; on the small dummy dataset used for this screenshot no historical production series is available, so it shows an empty state">
+        <figcaption>Historical Context — benchmarks your scenario against past production (needs real production-history data; empty on this dummy dataset).</figcaption>
+      </figure>
+    </div>
+    <p class="gallery-note">These are placeholders from the synthetic dummy dataset, not real EXIOBASE output — see <code>website/assets/screenshots/README.md</code> for how to regenerate with real data. The Geographic Impact map view is not pictured here: it needs real ISO3 region codes to render and stays blank on the 2-region dummy dataset.</p>
+  </div>
+</section>
+
+<section id="methodology">
+  <div class="container">
+    <h2>How it works</h2>
+    <p class="section-lede">EXIOBASE global input-output data, ENCORE materiality mapping, and a standard multi-regional input-output shock model.</p>
+    <div class="method-steps">
+      <div class="method-step">
+        <strong>1. Data</strong>
+        EXIOBASE 3, a global Multi-Regional Environmentally Extended Supply-Use/Input-Output database covering 44 countries, 5 rest-of-world regions, and 163 sectors.
+      </div>
+      <div class="method-step">
+        <strong>2. Materiality</strong>
+        ENCORE (Global Canopy &amp; UNEP) links economic sectors to their ecosystem-service dependencies; VESDIO uses ENCORE's "High"/"Very High" dependency ratings to decide which EXIOBASE sectors are shocked by an ecosystem-service scenario.
+      </div>
+      <div class="method-step">
+        <strong>3. Shock</strong>
+        A user-chosen percentage magnitude is converted into an absolute production change (relative to 2021 reference-year values) for the affected sector-region(s).
+      </div>
+      <div class="method-step">
+        <strong>4. Propagation</strong>
+        The change propagates across all regions and sectors using either a Leontief demand-side model or a Ghosh supply-side model, then is aggregated back to a relative percentage change for your position or portfolio.
+      </div>
+    </div>
+    <p style="text-align:center; color: var(--color-text-muted); font-size: var(--font-size-sm);">
+      Full methodology, data-source citations, and formulas are documented in the
+      <a href="https://github.com/frankiecho/vesdio#methodology" target="_blank" rel="noopener">repository README</a>.
+    </p>
+  </div>
+</section>
+
+<section id="limitations">
+  <div class="container">
+    <div class="limitations">
+      <h2>Assumptions &amp; limitations</h2>
+      <p class="callout-lead">VESDIO is highly experimental and its methods are not empirically or scientifically validated via peer review. Treat every result as a rough, directional indicator — not a number to put in a disclosure filing unmodified.</p>
+      <ul>
+        <li>Does not use scientific pressure–response coefficients to translate an ecosystem-service disruption into a sectoral production change — the magnitude you choose is applied directly as a production shock.</li>
+        <li>Does not use the more rigorous (but computationally expensive) shock-simulation methods, such as interior-point optimization; results could be inaccurate as a result.</li>
+        <li>Sectors ENCORE rates "Moderate", "Low", or "Very Low" dependency are assumed unaffected by first-order effects of an ecosystem-service shock (though they can still be hit by second- or higher-order supply-chain effects).</li>
+        <li>Has no "materiality" thresholds — it does not tell you whether a dependency is financially material to your business; you still need to interpret the output in your own business context.</li>
+        <li>Is based on 2021 EXIOBASE data and is <strong>not forward-looking</strong>: results should be read as "what if this shock had happened in 2021?", not as a projection of a future shock (and do not reflect events like COVID-19).</li>
+        <li>Cannot replace in-depth scenario analysis incorporating your business's specific operating context and supply-chain characteristics.</li>
+        <li>Was built with extensive AI-assistance (see the AI-use declaration in the footer) — review its outputs and code with appropriate caution.</li>
+      </ul>
+      <p style="margin-bottom:0; font-size: var(--font-size-sm);">VESDIO is not (yet) endorsed by, or part of the recommended toolkit for, TNFD disclosures.</p>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="container footer-grid">
+    <div>
+      <h4>VESDIO</h4>
+      <p>Valuing Ecosystem Services Dependencies with Input-Output modeling — an experimental, open, TNFD-adjacent scenario-analysis tool.</p>
+      <p>No open-source license has been published for this repository yet; contact the maintainer via GitHub before reuse or redistribution.</p>
+      <div class="ai-declaration">
+        <strong>AI-use declaration:</strong> This tool was created with extensive assistance from large language models. Users should be cautious of results from the tool and aware of the security implications of running AI-assisted code; models that train on AI-generated code should account for the risk of inherited hallucinations.
+      </div>
+    </div>
+    <div>
+      <h4>Links &amp; sources</h4>
+      <ul>
+        <li><a href="https://github.com/frankiecho/vesdio" target="_blank" rel="noopener">Source code on GitHub</a></li>
+        <li><a href="https://github.com/frankiecho/vesdio/releases/latest" target="_blank" rel="noopener">Latest release</a></li>
+        <li><a href="https://doi.org/10.5281/zenodo.15689391" target="_blank" rel="noopener">EXIOBASE 3 (Zenodo DOI 10.5281/zenodo.15689391)</a></li>
+        <li><a href="https://encorenature.org/en" target="_blank" rel="noopener">ENCORE — Global Canopy &amp; UNEP</a></li>
+      </ul>
+    </div>
+  </div>
+</footer>
+
+<script>
+(function () {
+  "use strict";
+
+  // --- Theme toggle: cycles OS-default -> light -> dark -> OS-default. ---
+  var root = document.documentElement;
+  var toggle = document.getElementById("theme-toggle");
+  var STORAGE_KEY = "vesdio-theme";
+
+  function apply(theme) {
+    if (theme === "light" || theme === "dark") {
+      root.setAttribute("data-theme", theme);
+    } else {
+      root.removeAttribute("data-theme");
+    }
+  }
+
+  var saved = null;
+  try { saved = localStorage.getItem(STORAGE_KEY); } catch (e) { /* ignore */ }
+  apply(saved);
+
+  toggle.addEventListener("click", function () {
+    var current = root.getAttribute("data-theme");
+    var next = current === "dark" ? "light" : (current === "light" ? null : "dark");
+    apply(next);
+    try {
+      if (next) { localStorage.setItem(STORAGE_KEY, next); }
+      else { localStorage.removeItem(STORAGE_KEY); }
+    } catch (e) { /* ignore */ }
+  });
+
+  // --- OS auto-detect for the primary hero download button (label only; ---
+  // --- all three per-OS buttons point at the same releases/latest URL). ---
+  var osLabel = document.getElementById("primary-os");
+  var platform = (navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || navigator.userAgent || "";
+  platform = platform.toLowerCase();
+  if (platform.indexOf("mac") !== -1) {
+    osLabel.textContent = "macOS";
+  } else if (platform.indexOf("win") !== -1) {
+    osLabel.textContent = "Windows";
+  } else if (platform.indexOf("linux") !== -1 || platform.indexOf("x11") !== -1) {
+    osLabel.textContent = "Linux";
+  }
+})();
+</script>
+
+</body>
+</html>
