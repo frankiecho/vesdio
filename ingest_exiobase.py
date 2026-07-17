@@ -25,6 +25,7 @@ No other application code needs to change to support a new provider.
 import pymrio
 import pandas as pd
 import numpy as np
+import hashlib
 import json
 import os
 import shutil
@@ -451,6 +452,121 @@ def build_distributable_bundle(year=2021, output_dir=None, float32=True, include
 
     print(f"Bundle ready at {output_dir}")
     return output_dir
+
+
+def _sha256_and_size(path: Path):
+    """Computes (sha256_hex, byte_size) for a file, streaming so this works
+    fine on the multi-hundred-MB L/G matrices."""
+    h = hashlib.sha256()
+    size = 0
+    with open(path, 'rb') as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b''):
+            h.update(chunk)
+            size += len(chunk)
+    return h.hexdigest(), size
+
+
+def build_release_manifest(bundle_dir, year=2021, output_dir=None):
+    """
+    Turns an assembled offline bundle (as produced by
+    `build_distributable_bundle(year)`) into a flat set of GitHub-release-
+    ready assets plus the `manifest.json` that `src/data_bootstrap.py`
+    (`ensure_reference_data`) expects to find at the configured
+    `DATA_RELEASE_BASE_URL`.
+
+    GitHub release assets live in a single flat namespace per release (no
+    subdirectories), so every file gets renamed to a flat, collision-free
+    name while `manifest.json` records the repo-relative `path` it should be
+    written back to under the app's data directory on first run:
+
+        exiobase/<year>/EXIOBASE_A.parquet  -> EXIOBASE_<year>_A.parquet
+        exiobase/<year>/EXIOBASE_L.parquet  -> EXIOBASE_<year>_L.parquet
+        exiobase/<year>/EXIOBASE_G.parquet  -> EXIOBASE_<year>_G.parquet  (optional)
+        exiobase/<year>/EXIOBASE_Y.parquet  -> EXIOBASE_<year>_Y.parquet
+        exiobase/<year>/EXIOBASE_E.parquet  -> EXIOBASE_<year>_E.parquet
+        exiobase/<year>/EXIOBASE_X.parquet  -> EXIOBASE_<year>_X.parquet
+        exiobase/<year>/labels.json         -> labels_<year>.json
+        exiobase/production_history.parquet -> production_history.parquet   (optional, kept as-is)
+        ENCORE_data/encore_materiality.json -> encore_materiality.json      (optional, kept as-is)
+
+    Args:
+        bundle_dir: path to a bundle produced by `build_distributable_bundle`
+            (i.e. containing `exiobase/<year>/EXIOBASE_*.parquet` +
+            `labels.json`, and optionally `exiobase/production_history.parquet`
+            / `ENCORE_data/encore_materiality.json`).
+        year: the reference year the bundle was built for (must match the
+            `<year>` subdirectory inside `bundle_dir`).
+        output_dir: where to write the flat release-asset files +
+            `manifest.json`. Defaults to `<bundle_dir>/release`.
+
+    Returns:
+        The Path to `output_dir`, containing every asset ready to upload
+        (via `gh release upload` or the GitHub web UI) plus `manifest.json`.
+    """
+    bundle_dir = Path(bundle_dir)
+    year_dir = bundle_dir / 'exiobase' / str(year)
+    if not year_dir.exists():
+        raise FileNotFoundError(
+            f"No {year} bundle found under {bundle_dir}/exiobase/{year}. "
+            f"Run build_distributable_bundle({year}) first."
+        )
+
+    output_dir = Path(output_dir) if output_dir else (bundle_dir / 'release')
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    print(f"Building release manifest for {year} from {bundle_dir} -> {output_dir}")
+
+    # (source relative to bundle_dir, flat asset name, app-relative target path, required)
+    candidates = [
+        (year_dir / 'EXIOBASE_A.parquet', f'EXIOBASE_{year}_A.parquet', f'exiobase/{year}/EXIOBASE_A.parquet', True),
+        (year_dir / 'EXIOBASE_L.parquet', f'EXIOBASE_{year}_L.parquet', f'exiobase/{year}/EXIOBASE_L.parquet', True),
+        (year_dir / 'EXIOBASE_G.parquet', f'EXIOBASE_{year}_G.parquet', f'exiobase/{year}/EXIOBASE_G.parquet', False),
+        (year_dir / 'EXIOBASE_Y.parquet', f'EXIOBASE_{year}_Y.parquet', f'exiobase/{year}/EXIOBASE_Y.parquet', True),
+        (year_dir / 'EXIOBASE_E.parquet', f'EXIOBASE_{year}_E.parquet', f'exiobase/{year}/EXIOBASE_E.parquet', True),
+        (year_dir / 'EXIOBASE_X.parquet', f'EXIOBASE_{year}_X.parquet', f'exiobase/{year}/EXIOBASE_X.parquet', True),
+        (year_dir / 'labels.json', f'labels_{year}.json', f'exiobase/{year}/labels.json', True),
+        (bundle_dir / 'exiobase' / 'production_history.parquet', 'production_history.parquet', 'exiobase/production_history.parquet', False),
+        (bundle_dir / 'ENCORE_data' / 'encore_materiality.json', 'encore_materiality.json', 'ENCORE_data/encore_materiality.json', False),
+    ]
+
+    files_manifest = []
+    uploadable = []
+    for src, asset_name, target_path, required in candidates:
+        if not src.exists():
+            level = "Warning" if required else "Note"
+            print(f"{level}: {src} not found; skipping "
+                  f"({'this is a required file!' if required else 'optional, app degrades gracefully without it'}).")
+            continue
+
+        dest = output_dir / asset_name
+        shutil.copy2(src, dest)
+        sha256_hex, size_bytes = _sha256_and_size(dest)
+        files_manifest.append({
+            'asset': asset_name,
+            'path': target_path,
+            'sha256': sha256_hex,
+            'bytes': size_bytes,
+            'required': required,
+        })
+        uploadable.append(asset_name)
+        print(f"  {src} -> {dest.name}  ({size_bytes:,} bytes, sha256={sha256_hex[:12]}...)")
+
+    manifest = {'year': year, 'files': files_manifest}
+    manifest_path = output_dir / 'manifest.json'
+    with open(manifest_path, 'w') as f:
+        json.dump(manifest, f, indent=2)
+    uploadable.append('manifest.json')
+
+    print("\n-----------------------------------------------------")
+    print(f"Release manifest ready at {manifest_path}")
+    print("Upload the following files as assets on the GitHub Release "
+          "(e.g. `gh release upload <tag> <files...>`):")
+    for name in uploadable:
+        print(f"  {name}")
+    print("-----------------------------------------------------")
+
+    return output_dir
+
 
 if __name__ == '__main__':
     # Ingest data for all available years in parallel

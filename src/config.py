@@ -12,7 +12,27 @@ region vocabulary. They are re-exported here for backward compatibility,
 since `app.py` and other modules import them directly from `src.config`.
 """
 
+import os
+
 from src.design_tokens import COLORS
+
+# --- First-run reference-data download config (see src/data_bootstrap.py) ---
+# The packaged executable no longer bundles the EXIOBASE reference-year data
+# (vesdio.spec no longer includes DATA_DIR in `datas`); instead it downloads
+# per-matrix files from a GitHub Release on first run, described by a
+# `manifest.json` asset. Both are env-overridable so the data host can move
+# (e.g. a pinned version tag instead of `latest`, or a mirror) without a
+# code change.
+#
+# TODO(release): the `frankiecho/vesdio` release named here must actually
+# have `manifest.json` + the EXIOBASE_<year>_*.parquet / labels_<year>.json
+# assets uploaded (via `ingest_exiobase.build_release_manifest`) before
+# shipping a build that relies on this default URL — see docs/PACKAGING.md.
+DATA_RELEASE_BASE_URL = os.getenv(
+    'DATA_RELEASE_BASE_URL',
+    'https://github.com/frankiecho/vesdio/releases/latest/download/',
+)
+DATA_MANIFEST_NAME = os.getenv('DATA_MANIFEST_NAME', 'manifest.json')
 
 # Color Palette for consistent styling across all charts
 # Okabe-Ito colorblind-friendly palette. Derived from src/design_tokens.py

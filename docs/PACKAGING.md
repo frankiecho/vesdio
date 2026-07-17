@@ -1,18 +1,27 @@
-# Packaging VESDIO as an offline desktop app
+# Packaging VESDIO as a desktop app
 
 VESDIO ships as a native-feeling desktop app rather than "a web page you have
 to keep a browser tab open for": the Dash/Flask server still does all the
 work, but it runs on a background thread and is displayed inside a native
 [`pywebview`](https://pywebview.flowrl.com/) window instead of a browser tab.
-Combined with a bundled, pre-processed reference-year dataset, the packaged
-app requires **no network access** and **no separate EXIOBASE download** to
-run.
+
+**As of this workstream, the executable no longer bundles the EXIOBASE
+dataset.** A single ingested reference year (with the dense Leontief/Ghosh
+inverse matrices) is well over a gigabyte even at float32, which made for a
+bloated, slow-to-download, hard-to-host executable (the only prior release
+was a single 4.2 GB file, too big for a GitHub release asset). Instead, the
+packaged app downloads the reference-year data **once, on first run**, from
+per-matrix files attached to a GitHub Release, into a small, persistent
+per-user data directory — see "First-run behavior" (§4) below. After that
+first download, the app runs fully offline exactly as before.
 
 This document covers:
 
 1. How the pywebview launcher works (and its browser-tab fallback).
-2. How to build the offline data bundle.
-3. How to build the PyInstaller executable on Windows/macOS/Linux.
+2. How to build the offline data bundle, and how to cut a **data release**
+   for the first-run downloader to fetch from.
+3. How to build the PyInstaller executable on Windows/macOS/Linux (now
+   automated by `.github/workflows/build.yml`).
 4. First-run behavior and troubleshooting.
 
 ---
@@ -162,14 +171,62 @@ normally by `ingest_and_save_exiobase`.
 (`A`, `Y`, `E`, `X`, labels, ENCORE materiality, and production history are
 all comparatively small — low tens of MB combined.)
 
+### Cutting a data release (for the first-run downloader)
+
+Once you have an assembled bundle (above), `ingest_exiobase.py` provides a
+second helper, `build_release_manifest()`, that turns it into the flat set
+of files + `manifest.json` that `src/data_bootstrap.py`
+(`ensure_reference_data()`) expects to find attached to a GitHub Release:
+
+```python
+from ingest_exiobase import build_distributable_bundle, build_release_manifest
+
+bundle_dir = build_distributable_bundle(year=2021)      # as above
+release_dir = build_release_manifest(bundle_dir, year=2021)  # -> bundle_dir/release/
+```
+
+This produces, in `release_dir`:
+
+- `EXIOBASE_2021_A.parquet`, `..._L.parquet`, `..._G.parquet` (optional),
+  `..._Y.parquet`, `..._E.parquet`, `..._X.parquet` — the per-year matrices,
+  flat-renamed (GitHub release assets can't be nested in folders).
+- `labels_2021.json` — the year's labels/defaults.
+- `production_history.parquet`, `encore_materiality.json` — optional extras,
+  kept under their original names.
+- `manifest.json` — maps each of the above back to its on-disk target path
+  (`exiobase/2021/EXIOBASE_A.parquet`, etc.), with a sha256 + byte size for
+  verification and a `required` flag (false for `G`, `production_history`,
+  `encore_materiality` — the app degrades gracefully without them).
+
+**To publish:** create (or reuse) a GitHub Release on the `vesdio` repo and
+upload every file `build_release_manifest()` printed, including
+`manifest.json` itself, as release assets — e.g.:
+
+```bash
+gh release upload <tag> release/*.parquet release/*.json
+```
+
+The default downloader URL (`DATA_RELEASE_BASE_URL` in `src/config.py`) is
+`https://github.com/frankiecho/vesdio/releases/latest/download/`, so
+uploading to whichever release is currently tagged "latest" is sufficient
+for the default configuration; pin a specific tag instead by overriding
+`DATA_RELEASE_BASE_URL` (env var) if you need release/data versions to move
+independently.
+
+> **TODO before shipping a build**: the release named above must actually
+> exist with these assets uploaded, or first-run users will see a failed
+> download and fall back to the synthetic dummy dataset. See the `TODO` left
+> in `src/config.py`.
+
 ---
 
 ## 3. Building the PyInstaller executable
 
-`vesdio.spec` already bundles whatever directory `DATA_DIR` points to (via
-`.env`, default `data/`) as `data/` inside the packaged app, plus `assets/`
-and the metadata/hidden imports needed by pandas/pyarrow/dask/plotly. It now
-also declares `pywebview` as a hidden import.
+`vesdio.spec` bundles `assets/` (icons, `design-system.css`, etc.) and the
+metadata/hidden imports needed by pandas/pyarrow/dask/plotly/pywebview —
+**it no longer bundles any EXIOBASE data** (the `(DATA_DIR, 'data')` `datas`
+entry was removed; see §1 and §4). This is what keeps the executable itself
+small; the reference dataset is fetched separately on first run.
 
 ### Steps (any platform)
 
@@ -177,19 +234,24 @@ also declares `pywebview` as a hidden import.
 # 1. Install build dependencies (in your build venv)
 pip install -r requirements.txt pyinstaller
 
-# 2. Point DATA_DIR at your assembled offline bundle (see section 2), e.g. in .env:
-echo "DATA_DIR=data/bundle/2021" > .env
-# (or copy/rename data/bundle/2021 to ./data before building)
-
-# 3. Build
+# 2. Build
 pyinstaller vesdio.spec
 
-# Output: dist/vesdio_dist/  (contains the vesdio executable + bundled data/assets)
+# Output: dist/vesdio_dist/  (contains the vesdio executable + assets, no data/)
 ```
 
 Distribute the whole `vesdio_dist/` directory (PyInstaller's `--onedir`
 style, as configured via `COLLECT` in `vesdio.spec`) — the executable
 depends on the sibling files/folders next to it.
+
+**Automated builds:** `.github/workflows/build.yml` runs exactly this, on a
+`windows-latest`/`macos-latest`/`ubuntu-latest` matrix, on
+`workflow_dispatch` or a `v*` tag push (installing the right pywebview
+native backend per OS first — see the table below). It uploads each OS's
+zipped `vesdio_dist/` as a workflow artifact, and additionally attaches
+them to the GitHub Release when triggered by a tag push. It does **not**
+produce the data release (§2) — that's the maintainer's separate,
+one-time-per-year step, uploaded to the same release as the executables.
 
 ### Platform GUI backend dependencies
 
@@ -222,17 +284,44 @@ preferred.
 
 ## 4. First-run behavior
 
-- On launch, VESDIO starts the Flask server on a background thread and opens
-  the pywebview window pointed at `http://127.0.0.1:8050`. No external
-  network call is made by the app itself at startup.
-- Data is loaded per-year from `get_base_data_path()` (`src/data_loader.py`),
-  which resolves to `sys._MEIPASS/data` in a frozen/packaged build, or
-  `DATA_DIR`/`./data` in a normal dev environment. If the bundled reference
-  year's files are present, the app works fully offline immediately.
-- If a user wants a year that wasn't bundled, they can still run
-  `ingest_exiobase.py` themselves (this requires network access and
-  significant disk space/time) to add it under their local `data/`
-  directory — the packaged app and the dev pipeline share the same data
+- **Persistent data directory.** `get_base_data_path()` (`src/paths.py`) now
+  resolves to a per-user, persistent directory when frozen —
+  `platformdirs.user_data_dir("VESDIO")` + a `data` subdir (e.g.
+  `~/.local/share/VESDIO/data` on Linux, `~/Library/Application
+  Support/VESDIO/data` on macOS, `%LOCALAPPDATA%\VESDIO\data` on Windows) —
+  **not** `sys._MEIPASS`, which is a read-only temp extraction directory
+  PyInstaller re-creates on every launch and would make any downloaded data
+  disappear immediately. In a normal dev environment this is unchanged
+  (`DATA_DIR`/`./data`). `VESDIO_DATA_DIR` overrides the base path in either
+  mode.
+- **First-run download.** Before starting the Flask server, a frozen build
+  (`getattr(sys, 'frozen', False)`, or `VESDIO_FETCH_DATA=1` for local
+  testing without building an executable) calls
+  `src.data_bootstrap.ensure_reference_data()`. This:
+  1. Checks whether the reference year's files already exist locally — if
+     so, it does nothing (no network call at all on subsequent launches).
+  2. Otherwise fetches `manifest.json` from `DATA_RELEASE_BASE_URL` (default
+     `https://github.com/frankiecho/vesdio/releases/latest/download/`, both
+     configurable via `src/config.py`/env vars).
+  3. Downloads each file the manifest lists (streamed to a `.part` temp file,
+     retried up to 4 times with exponential backoff on network errors),
+     verifying sha256 + byte size before renaming it into place.
+  4. Non-fatally skips any file flagged `"required": false` in the manifest
+     (e.g. `G`, `production_history`, `encore_materiality`) if it fails —
+     those already have graceful fallbacks in `src/providers/exiobase.py`.
+  Progress is printed to the console (`[data setup] ...` lines); if the
+  download fails entirely (no network, or the release isn't published yet),
+  the app still starts, using the synthetic dummy dataset generated by
+  `src.providers.exiobase._generate_dummy_data` (unchanged from before this
+  workstream) so it's never left in a broken state.
+- Dev/CI invocations of `python app.py` never trigger a download — the
+  downloader import and call are gated behind `is_frozen or
+  VESDIO_FETCH_DATA`, so `create_dummy_data.py` + the dummy fallback remain
+  the dev-loop path with zero network dependency.
+- If a user wants a year that wasn't shipped in the data release, they can
+  still run `ingest_exiobase.py` themselves (this requires network access
+  and significant disk space/time) to add it under their local data
+  directory — the packaged app and the dev pipeline share the same on-disk
   layout, so no code changes are needed to pick up additional years.
 - Closing the pywebview window ends the process (the Flask server thread is
   a daemon thread and stops with it) — there is no separate "quit" step

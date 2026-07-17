@@ -1,21 +1,26 @@
 # -*- mode: python ; coding: utf-8 -*-
 
 import sys
-import os
 from pathlib import Path
 from dotenv import load_dotenv
 from PyInstaller.utils.hooks import collect_data_files, copy_metadata
 
-# Load .env file to get DATA_DIR for the build process
+# .env is no longer needed for DATA_DIR (data isn't bundled anymore, see
+# below), but is still loaded in case future build-time toggles want it.
 load_dotenv()
 
 block_cipher = None
 
 # --- Data files to be bundled ---
-# It bundles the directory specified by DATA_DIR in your .env file (or 'data' by default).
-# The destination inside the package will always be 'data'.
-datas = [ (os.getenv('DATA_DIR', 'data'), 'data'),
-          (str(Path(__name__).parent / 'assets'), 'assets') ]
+# The EXIOBASE reference dataset is intentionally NOT bundled here anymore
+# (it previously was, via a `(DATA_DIR, 'data')` entry) — a single ingested
+# year is well over a gigabyte even at float32, which made for a bloated,
+# slow-to-download executable. Instead, `src/data_bootstrap.py` fetches it
+# from a GitHub Release into a persistent per-user data directory on first
+# run (see `src/paths.py: get_base_data_path()` and docs/PACKAGING.md). The
+# packaged app therefore only needs `assets/` (icons, design-system CSS,
+# etc.), which stays small.
+datas = [ (str(Path(__name__).parent / 'assets'), 'assets') ]
 
 # Add data files from pandas, plotly, and dask to ensure they are bundled correctly.
 datas += collect_data_files('plotly')
@@ -39,6 +44,9 @@ hiddenimports = [
     'dask.bag',
     'pyarrow',
     'webview',
+    # Resolves the persistent per-user data dir (src/paths.py); PyInstaller's
+    # static analysis can miss it since it's imported deep inside src.paths.
+    'platformdirs',
 ]
 
 # pywebview picks its native GUI backend at import time, and PyInstaller

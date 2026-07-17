@@ -1305,6 +1305,43 @@ if __name__ == '__main__':
     port = 8050
     url = f"http://{host}:{port}"
 
+    # --- First-run reference-data provisioning ---
+    # The packaged executable no longer bundles the EXIOBASE dataset (see
+    # vesdio.spec / docs/PACKAGING.md), so a frozen build needs to fetch it
+    # from a GitHub Release before the app has anything real to show. This
+    # must NEVER run in a normal dev/CI invocation of `python app.py` — the
+    # dummy-data fallback (src/providers/exiobase._generate_dummy_data) is
+    # what dev relies on, and it must keep working with no network at all.
+    # `VESDIO_FETCH_DATA=1` is an explicit opt-in escape hatch for testing
+    # the downloader locally without building an executable.
+    if is_frozen or os.environ.get('VESDIO_FETCH_DATA'):
+        from src.data_bootstrap import ensure_reference_data
+
+        def _print_progress(value):
+            # Keep this deliberately simple: a console progress line is
+            # sufficient here (a pywebview splash window would need its own
+            # server/HTML and isn't worth the complexity for a one-time,
+            # short-lived download). `value` is either a float fraction in
+            # [0, 1] or a short status string; render each accordingly.
+            if isinstance(value, float):
+                print(f"[data setup] {value * 100:.0f}%")
+            else:
+                print(f"[data setup] {value}")
+
+        try:
+            print("Checking for reference dataset (first run may download data)...")
+            ok = ensure_reference_data(progress=_print_progress)
+            if not ok:
+                print(
+                    "Could not fully provision reference data (no network, or the "
+                    "release isn't published yet). VESDIO will start with the "
+                    "synthetic dummy dataset instead."
+                )
+        except Exception as e:
+            # Never let a downloader problem prevent the app from starting —
+            # worst case, the per-loader dummy-data fallback kicks in.
+            print(f"Reference data setup failed unexpectedly ({e}); continuing with dummy-data fallback.")
+
     try:
         # Desktop mode: run the Dash/Flask server on a background thread
         # bound to localhost, then host it inside a native pywebview

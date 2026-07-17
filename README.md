@@ -102,6 +102,33 @@ python app.py
 ```
 Open your web browser and navigate to `http://127.0.0.1:8050` to use the tool.
 
+## Desktop app (prebuilt executable)
+
+VESDIO also ships as a native-feeling desktop app (Dash/Flask + a
+[`pywebview`](https://pywebview.flowrl.com/) window), built per-OS by
+`.github/workflows/build.yml` and published to [GitHub
+Releases](https://github.com/frankiecho/vesdio/releases). Grab the
+`vesdio-windows.zip` / `vesdio-macos.zip` / `vesdio-linux.zip` for your
+platform and run the `vesdio` executable inside.
+
+The executable itself is small — **it does not bundle the EXIOBASE
+dataset**. On first launch it downloads the reference-year data (per-matrix
+files + a `manifest.json` describing them, verified by sha256) from the same
+GitHub Release, into a persistent per-user data directory (e.g.
+`~/.local/share/VESDIO/data` on Linux, `~/Library/Application
+Support/VESDIO/data` on macOS, `%LOCALAPPDATA%\VESDIO\data` on Windows) —
+progress is printed to the console window. After that first download, the
+app runs fully offline. If the download can't complete (no network, or the
+data release isn't published yet), the app still starts, using a small
+synthetic dummy dataset so it's never left broken.
+
+See `docs/PACKAGING.md` for: how the first-run downloader and persistent
+data directory work, how a maintainer cuts a data release (`manifest.json` +
+per-matrix release assets, via `ingest_exiobase.build_release_manifest()`),
+how to override the download source (`DATA_RELEASE_BASE_URL` /
+`DATA_MANIFEST_NAME` env vars, e.g. to pin a specific release tag instead of
+`latest`), and how to build the executable yourself.
+
 ## Methodology
 
 ### Data sources

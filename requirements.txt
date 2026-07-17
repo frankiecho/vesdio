@@ -12,3 +12,4 @@ dash-mantine-components
 pytest
 scipy
 pywebview
+platformdirs
